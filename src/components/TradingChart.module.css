@@ -1,0 +1,198 @@
+/* Main chart container */
+.chartContainer {
+  background: #141414;
+  border: none;
+  padding: 0;
+  color: rgba(238, 237, 236, 1);
+  font-family: 'Geist Mono';
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+}
+
+/* Chart wrapper */
+.chartWrapper {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  transition: all 0.1s ease-out;
+}
+
+/* Chart content */
+.chartContent {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Grid and X-axis container */
+.gridAndX {
+  position: absolute;
+  left: 100px;
+  top: 0;
+  right: 0;
+  bottom: 30px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Grid container */
+.gridContainer {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  background: #141414;
+}
+
+/* Center line - YELLOW VERTICAL */
+.centerLine {
+  position: absolute;
+  left: 50%;
+  width: 3px;
+  height: 100%;
+  background-color: #ffd500;
+  z-index: 60;
+  box-shadow: 0 0 10px rgba(255, 213, 0, 0.6);
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+/* SVG line path */
+.linePath {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 4;
+  pointer-events: none;
+}
+
+/* Data point - green dot */
+.dataPoint {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  background-color: #00ff24;
+  border: 3px solid #ffffff;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 10;
+  box-shadow: 0 0 10px rgba(0, 255, 36, 0.85);
+  pointer-events: none;
+}
+
+/* Price badge */
+.priceBadge {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(14px, -50%);
+  background: linear-gradient(to bottom, rgba(23, 216, 49, 0.1), rgba(1, 138, 20, 0.1));
+  border: 1px solid rgba(0, 125, 18, 0.1);
+  border-radius: 12px;
+  padding: 6px 10px;
+  backdrop-filter: blur(3px);
+  z-index: 10;
+}
+
+.priceBadge span {
+  font-size: 13px;
+  color: white;
+  font-weight: 700;
+  letter-spacing: -0.6px;
+}
+
+/* Grid background pattern */
+.grid {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-image: 
+    linear-gradient(to right, rgba(255,255,255,0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255,255,255,0.03) 1px, transparent 1px);
+  background-size: 60px 60px;
+  background-position: 0 0;
+  will-change: transform;
+  pointer-events: none;
+  transition: transform 0.1s ease-out;
+}
+
+/* Grid cells */
+.gridCell {
+  position: absolute;
+  border: 1px solid rgba(255, 255, 255, 0.02);
+  cursor: pointer;
+  transition: background-color 0.1s;
+}
+
+.gridCell:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.gridCell.selected {
+  background-color: rgba(0, 255, 36, 0.2);
+  border-color: rgba(0, 255, 36, 0.4);
+}
+
+/* Info display */
+.info {
+  position: absolute;
+  bottom: 10px;
+  left: 20px;
+  font-size: 14px;
+  color: #b0b3b8;
+  z-index: 100;
+}
+
+.orderPill {
+  position: absolute;
+  top: 5%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #000;
+  border: 0.5px solid rgba(255,255,255,0.2);
+  border-radius: 50px;
+  padding: 8px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  z-index: 1000;
+  white-space: nowrap;
+  animation: slideDown 0.3s ease-out;
+}
+
+/* Segmented green spinner */
+.orderSpinner {
+  width: 18px;
+  height: 18px;
+  display: inline-block;
+  border-radius: 50%;
+  background: repeating-conic-gradient(
+    from 0deg,
+    #00ff24 0deg 6deg,
+    rgba(0,255,36,0.15) 6deg 45deg
+  );
+  /* hollow center → ring */
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(50% - 2.5px), #000 0);
+          mask: radial-gradient(farthest-side, transparent calc(50% - 2.5px), #000 0);
+  animation: orderSpin 1.1s linear infinite;
+}
+
+.orderText {
+  color: #fff;
+  font: 300 14px 'Geist Mono', monospace;
+}
+
+/* Animations */
+@keyframes orderSpin { to { transform: rotate(360deg); } }
+
+@keyframes slideDown {
+  0% { opacity: 0; transform: translate(-50%, -10px); }
+  100% { opacity: 1; transform: translate(-50%, 0); }
+}

@@ -1,0 +1,1080 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⚡ Real-Time Latency Test</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            padding: 20px;
+            min-height: 100vh;
+            color: white;
+        }
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+        h1 {
+            text-align: center;
+            color: white;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        .subtitle {
+            text-align: center;
+            color: rgba(255,255,255,0.9);
+            font-size: 1.2em;
+            margin-bottom: 30px;
+        }
+        .debug-info {
+            background: rgba(0,0,0,0.3);
+            padding: 10px 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+            font-size: 0.9em;
+            color: rgba(255,255,255,0.8);
+            font-family: 'Courier New', monospace;
+        }
+        .config-panel {
+            background: rgba(255,255,255,0.15);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .config-panel input {
+            padding: 10px 15px;
+            border-radius: 8px;
+            border: 2px solid rgba(255,255,255,0.3);
+            background: rgba(255,255,255,0.2);
+            color: white;
+            font-size: 1em;
+            flex: 1;
+            min-width: 200px;
+        }
+        .config-panel input::placeholder {
+            color: rgba(255,255,255,0.7);
+        }
+        .config-panel select {
+            padding: 10px 15px;
+            border-radius: 8px;
+            border: 2px solid rgba(255,255,255,0.3);
+            background: rgba(255,255,255,0.2);
+            color: white;
+            font-size: 1em;
+        }
+        .config-panel button {
+            background: white;
+            color: #1e3c72;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 10px;
+            font-size: 1em;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .config-panel button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+        .config-panel button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .panel {
+            background: rgba(255,255,255,0.15);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            border: 2px solid rgba(255,255,255,0.2);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+        }
+        .panel h2 {
+            color: white;
+            margin-bottom: 20px;
+            font-size: 1.8em;
+        }
+        .status {
+            display: inline-block;
+            padding: 8px 20px;
+            border-radius: 25px;
+            font-weight: bold;
+            font-size: 0.9em;
+            margin-left: 10px;
+        }
+        .connected {
+            background: #4ade80;
+            color: white;
+        }
+        .disconnected {
+            background: #ef4444;
+            color: white;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background: rgba(0,0,0,0.3);
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+            border: 2px solid rgba(255,255,255,0.1);
+        }
+        .stat-label {
+            color: rgba(255,255,255,0.7);
+            font-size: 0.9em;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .stat-value {
+            color: white;
+            font-size: 2.5em;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        .stat-value.good {
+            color: #4ade80;
+        }
+        .stat-value.warning {
+            color: #fbbf24;
+        }
+        .stat-value.bad {
+            color: #ef4444;
+        }
+        .latency-chart {
+            background: rgba(0,0,0,0.3);
+            border-radius: 15px;
+            padding: 20px;
+            margin: 20px 0;
+            height: 300px;
+            position: relative;
+            overflow: hidden;
+        }
+        .chart-container {
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+        .latency-table {
+            background: rgba(0,0,0,0.3);
+            border-radius: 15px;
+            padding: 20px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .table-header {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr 1fr;
+            gap: 10px;
+            padding: 10px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 8px;
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+        .table-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr 1fr;
+            gap: 10px;
+            padding: 10px;
+            margin: 5px 0;
+            background: rgba(255,255,255,0.05);
+            border-radius: 8px;
+            border-left: 4px solid #4ade80;
+        }
+        .table-row.low-latency {
+            border-left-color: #4ade80;
+        }
+        .table-row.medium-latency {
+            border-left-color: #fbbf24;
+        }
+        .table-row.high-latency {
+            border-left-color: #ef4444;
+        }
+        .true-latency-box {
+            background: rgba(74, 222, 128, 0.2);
+            border: 2px solid #4ade80;
+            border-radius: 15px;
+            padding: 20px;
+            margin: 20px 0;
+            text-align: center;
+        }
+        .true-latency-box .stat-label {
+            color: rgba(255,255,255,0.8);
+        }
+        .true-latency-box .stat-value {
+            color: #4ade80;
+        }
+        @media (max-width: 768px) {
+            .grid { grid-template-columns: 1fr; }
+            .stats-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚡ Real-Time Latency Test</h1>
+        <div class="subtitle">Measure WebSocket latency in real-time</div>
+
+        <div class="debug-info" id="debugInfo" style="display: none;">
+            <strong>Debug:</strong> <span id="debugText">No messages received yet. Check browser console (F12) for details.</span>
+        </div>
+
+        <div class="config-panel">
+            <input type="text" id="wsUrl" placeholder="WebSocket URL (e.g., ws://localhost:8080 or wss://your-domain.com)" value="ws://localhost:8080">
+            <select id="timeWindow">
+                <option value="5000">Last 5 seconds</option>
+                <option value="10000">Last 10 seconds</option>
+                <option value="30000">Last 30 seconds</option>
+                <option value="60000">Last 60 seconds</option>
+            </select>
+            <button id="connectBtn" onclick="toggleConnection()">Connect</button>
+            <button onclick="clearData()">Clear Data</button>
+            <button onclick="exportData()">Export CSV</button>
+        </div>
+
+        <div class="grid">
+            <!-- Price Feed Latency -->
+            <div class="panel">
+                <h2>
+                    📡 Price Feed Latency
+                    <span id="priceStatus" class="status disconnected">Disconnected</span>
+                </h2>
+                
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Current Latency</div>
+                        <div class="stat-value" id="currentLatency">-- ms</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Average Latency</div>
+                        <div class="stat-value" id="avgLatency">-- ms</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Max Latency</div>
+                        <div class="stat-value" id="maxLatency">-- ms</div>
+                    </div>
+                </div>
+
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Min Latency</div>
+                        <div class="stat-value" id="minLatency">-- ms</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Messages</div>
+                        <div class="stat-value" id="messageCount">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Jitter</div>
+                        <div class="stat-value" id="jitter">-- ms</div>
+                    </div>
+                </div>
+                
+                <div class="true-latency-box">
+                    <div class="stat-label">True Latency (Ping/Pong)</div>
+                    <div class="stat-value" id="trueLatency">-- ms</div>
+                    <div style="font-size: 0.7em; color: rgba(255,255,255,0.6); margin-top: 5px;">
+                        Measured via round-trip time (RTT/2)
+                    </div>
+                </div>
+
+                <div class="latency-chart">
+                    <div class="chart-container" id="priceChart"></div>
+                </div>
+
+                <div class="latency-table" id="priceTable">
+                    <div class="table-header">
+                        <div>Time</div>
+                        <div>Latency (ms)</div>
+                        <div>Price</div>
+                        <div>Server Time</div>
+                    </div>
+                    <div id="priceTableBody"></div>
+                </div>
+            </div>
+
+            <!-- Settlement Feed Latency -->
+            <div class="panel">
+                <h2>
+                    🎯 Settlement Feed Latency
+                    <span id="settlementStatus" class="status disconnected">Disconnected</span>
+                </h2>
+                
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Current Latency</div>
+                        <div class="stat-value" id="settlementCurrentLatency">-- ms</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Average Latency</div>
+                        <div class="stat-value" id="settlementAvgLatency">-- ms</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Max Latency</div>
+                        <div class="stat-value" id="settlementMaxLatency">-- ms</div>
+                    </div>
+                </div>
+
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Min Latency</div>
+                        <div class="stat-value" id="settlementMinLatency">-- ms</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Settlements</div>
+                        <div class="stat-value" id="settlementCount">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Jitter</div>
+                        <div class="stat-value" id="settlementJitter">-- ms</div>
+                    </div>
+                </div>
+
+                <div class="latency-chart">
+                    <div class="chart-container" id="settlementChart"></div>
+                </div>
+
+                <div class="latency-table" id="settlementTable">
+                    <div class="table-header">
+                        <div>Time</div>
+                        <div>Latency (ms)</div>
+                        <div>TWAP</div>
+                        <div>Period ID</div>
+                    </div>
+                    <div id="settlementTableBody"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let priceWs = null;
+        let settlementWs = null;
+        let isConnected = false;
+        
+        // Latency data storage
+        const priceLatencies = [];
+        const settlementLatencies = [];
+        const maxDataPoints = 1000; // Keep last 1000 measurements for export
+        let timeWindowMs = 5000; // Default 5 seconds
+        
+        // Clock skew compensation
+        let priceClockSkew = 0;
+        let priceClockSkewSamples = [];
+        let settlementClockSkew = 0;
+        let settlementClockSkewSamples = [];
+        const MAX_SKEW_SAMPLES = 10;
+        
+        // True latency measurement via ping/pong
+        let trueLatencySamples = [];
+        let pingInterval = null;
+
+        function updateDebugInfo(message) {
+            const debugEl = document.getElementById('debugInfo');
+            const debugText = document.getElementById('debugText');
+            if (debugEl && debugText) {
+                debugEl.style.display = 'block';
+                debugText.textContent = message;
+                // Auto-hide after 5 seconds
+                setTimeout(() => {
+                    if (debugText.textContent === message) {
+                        debugEl.style.display = 'none';
+                    }
+                }, 5000);
+            }
+        }
+
+        function toggleConnection() {
+            const url = document.getElementById('wsUrl').value.trim();
+            if (!url) {
+                alert('Please enter a WebSocket URL');
+                return;
+            }
+
+            if (isConnected) {
+                disconnect();
+            } else {
+                updateDebugInfo('Connecting...');
+                connect(url);
+            }
+        }
+
+        function connect(url) {
+            // Get time window from select
+            timeWindowMs = parseInt(document.getElementById('timeWindow').value);
+            
+            // Connect to price feed
+            priceWs = new WebSocket(`${url}/ws/prices`);
+            
+            priceWs.onopen = () => {
+                console.log('✅ Price WebSocket connection opened');
+                updateDebugInfo('✅ Price WebSocket connected');
+                updateStatus('priceStatus', true);
+                document.getElementById('connectBtn').textContent = 'Disconnect';
+                isConnected = true;
+                
+                // Start ping/pong for true latency measurement
+                startPingPong();
+            };
+
+            priceWs.onmessage = (event) => {
+                const receiveTime = Date.now();
+                let data;
+                try {
+                    data = JSON.parse(event.data);
+                } catch (error) {
+                    console.error('Failed to parse message:', error, event.data);
+                    return;
+                }
+                
+                // Debug: log all messages
+                console.log('📨 Price message received:', data);
+                updateDebugInfo(`Price message: ${JSON.stringify(data).substring(0, 100)}...`);
+                
+                if (data.type === 'connected') {
+                    console.log('✅ Connected to price feed');
+                    updateDebugInfo('✅ Connected to price feed');
+                    return;
+                }
+                
+                // Handle pong for true latency measurement
+                if (data.type === 'pong') {
+                    const roundTripTime = receiveTime - data.originalPingTime;
+                    const trueLatency = roundTripTime / 2; // One-way latency (approximation)
+                    
+                    trueLatencySamples.push(trueLatency);
+                    if (trueLatencySamples.length > 20) {
+                        trueLatencySamples.shift();
+                    }
+                    updatePriceStats(); // Update stats to show true latency
+                    return;
+                }
+
+                // Check for price data - be more lenient with the check
+                if (data.timestamp !== undefined && (data.price_usd !== undefined || data.price_raw !== undefined)) {
+                    // Calculate latency: difference between server timestamp and client receive time
+                    let serverTime;
+                    if (typeof data.timestamp === 'number') {
+                        if (data.timestamp > 1e12) {
+                            // Already in milliseconds
+                            serverTime = data.timestamp;
+                        } else if (data.timestamp > 1e9) {
+                            // In seconds (typical case for this server)
+                            serverTime = data.timestamp * 1000;
+                        } else {
+                            console.warn('⚠️ Invalid timestamp format:', data.timestamp, 'Data:', data);
+                            return;
+                        }
+                    } else {
+                        console.warn('⚠️ Timestamp is not a number:', data.timestamp, 'Data:', data);
+                        return;
+                    }
+                    
+                    const rawLatency = receiveTime - serverTime;
+                    
+                    // Sanity check - allow negative values initially (clock skew)
+                    if (Math.abs(rawLatency) > 10000) {
+                        console.warn('⚠️ Unusual latency detected:', rawLatency, 'ms. Server time:', new Date(serverTime).toISOString(), 'Client time:', new Date(receiveTime).toISOString());
+                        return;
+                    }
+                    
+                    console.log(`📊 Price latency: ${rawLatency.toFixed(2)}ms (server: ${new Date(serverTime).toLocaleTimeString()}, client: ${new Date(receiveTime).toLocaleTimeString()})`);
+                    updateDebugInfo(`📊 Price data received! Latency: ${rawLatency.toFixed(2)}ms`);
+                    
+                    // Detect and compensate for clock skew
+                    if (rawLatency < 0 && Math.abs(rawLatency) < 1000) {
+                        priceClockSkewSamples.push(rawLatency);
+                        if (priceClockSkewSamples.length > MAX_SKEW_SAMPLES) {
+                            priceClockSkewSamples.shift();
+                        }
+                        
+                        if (priceClockSkewSamples.length >= 3) {
+                            const avgSkew = priceClockSkewSamples.reduce((a, b) => a + b, 0) / priceClockSkewSamples.length;
+                            if (avgSkew < -10) {
+                                priceClockSkew = Math.abs(avgSkew);
+                                console.log(`📡 Price feed clock skew detected: ${priceClockSkew.toFixed(2)}ms`);
+                            }
+                        }
+                    }
+                    
+                    // Compensate for clock skew
+                    const adjustedLatency = Math.max(0, rawLatency + priceClockSkew);
+                    
+                    // Store latency data - handle both number and string price_usd
+                    const priceUsd = typeof data.price_usd === 'number' ? data.price_usd : parseFloat(data.price_usd) || 0;
+                    
+                    const latencyData = {
+                        latency: adjustedLatency,
+                        rawLatency: rawLatency,
+                        timestamp: receiveTime,
+                        serverTimestamp: serverTime,
+                        price: priceUsd,
+                        rawPrice: data.price_raw || 0
+                    };
+                    
+                    priceLatencies.push(latencyData);
+                    if (priceLatencies.length > maxDataPoints) {
+                        priceLatencies.shift();
+                    }
+                    
+                    updatePriceStats();
+                    updatePriceChart();
+                    updatePriceTable(latencyData);
+                } else {
+                    // Log messages that don't match expected format
+                    console.log('⚠️ Price message format not recognized:', data);
+                    updateDebugInfo(`⚠️ Unexpected price message format`);
+                }
+            };
+
+            priceWs.onerror = (error) => {
+                console.error('❌ Price WebSocket error:', error);
+                updateStatus('priceStatus', false);
+            };
+
+            priceWs.onclose = () => {
+                updateStatus('priceStatus', false);
+                if (isConnected) {
+                    setTimeout(() => connect(url), 2000); // Auto-reconnect
+                }
+            };
+
+            // Connect to settlement feed
+            settlementWs = new WebSocket(`${url}/ws/settlements`);
+            
+            settlementWs.onopen = () => {
+                console.log('✅ Settlement WebSocket connection opened');
+                updateDebugInfo('✅ Settlement WebSocket connected');
+                updateStatus('settlementStatus', true);
+            };
+
+            settlementWs.onmessage = (event) => {
+                const receiveTime = Date.now();
+                let data;
+                try {
+                    data = JSON.parse(event.data);
+                } catch (error) {
+                    console.error('Failed to parse settlement message:', error, event.data);
+                    return;
+                }
+                
+                // Debug: log all messages
+                console.log('📨 Settlement message received:', data);
+                updateDebugInfo(`Settlement message: ${JSON.stringify(data).substring(0, 100)}...`);
+                
+                if (data.type === 'connected') {
+                    console.log('✅ Connected to settlement feed');
+                    updateDebugInfo('✅ Connected to settlement feed');
+                    return;
+                }
+
+                if (data.type === 'settlement' && data.timestamp) {
+                    // Calculate latency
+                    let serverTime;
+                    if (typeof data.timestamp === 'number') {
+                        if (data.timestamp > 1e12) {
+                            serverTime = data.timestamp;
+                        } else if (data.timestamp > 1e9) {
+                            serverTime = data.timestamp * 1000;
+                        } else {
+                            console.warn('Invalid timestamp format:', data.timestamp);
+                            return;
+                        }
+                    } else {
+                        return;
+                    }
+                    
+                    const rawLatency = receiveTime - serverTime;
+                    console.log(`📊 Settlement latency: ${rawLatency.toFixed(2)}ms (Period: ${data.timeperiod_id})`);
+                    updateDebugInfo(`📊 Settlement received! Period: ${data.timeperiod_id}, Latency: ${rawLatency.toFixed(2)}ms`);
+                    
+                    // Sanity check
+                    if (Math.abs(rawLatency) > 10000) {
+                        console.warn('⚠️ Unusual latency detected:', rawLatency, 'ms');
+                        return;
+                    }
+                    
+                    // Detect and compensate for clock skew
+                    if (rawLatency < 0 && Math.abs(rawLatency) < 1000) {
+                        settlementClockSkewSamples.push(rawLatency);
+                        if (settlementClockSkewSamples.length > MAX_SKEW_SAMPLES) {
+                            settlementClockSkewSamples.shift();
+                        }
+                        
+                        if (settlementClockSkewSamples.length >= 3) {
+                            const avgSkew = settlementClockSkewSamples.reduce((a, b) => a + b, 0) / settlementClockSkewSamples.length;
+                            if (avgSkew < -10) {
+                                settlementClockSkew = Math.abs(avgSkew);
+                                console.log(`🎯 Settlement feed clock skew detected: ${settlementClockSkew.toFixed(2)}ms`);
+                            }
+                        }
+                    }
+                    
+                    // Compensate for clock skew
+                    const adjustedLatency = Math.max(0, rawLatency + settlementClockSkew);
+                    
+                    // Handle both number and string price_usd
+                    const twapPrice = typeof data.price_usd === 'number' ? data.price_usd : parseFloat(data.price_usd) || 0;
+                    
+                    const latencyData = {
+                        latency: adjustedLatency,
+                        rawLatency: rawLatency,
+                        timestamp: receiveTime,
+                        serverTimestamp: serverTime,
+                        twap: twapPrice,
+                        periodId: data.timeperiod_id
+                    };
+                    
+                    settlementLatencies.push(latencyData);
+                    if (settlementLatencies.length > maxDataPoints) {
+                        settlementLatencies.shift();
+                    }
+                    
+                    updateSettlementStats();
+                    updateSettlementChart();
+                    updateSettlementTable(latencyData);
+                } else {
+                    // Log messages that don't match expected format
+                    console.log('⚠️ Settlement message format not recognized:', data);
+                    updateDebugInfo(`⚠️ Unexpected settlement message format`);
+                }
+            };
+
+            settlementWs.onerror = (error) => {
+                console.error('❌ Settlement WebSocket error:', error);
+                updateStatus('settlementStatus', false);
+            };
+
+            settlementWs.onclose = () => {
+                updateStatus('settlementStatus', false);
+            };
+        }
+
+        function startPingPong() {
+            if (pingInterval) {
+                clearInterval(pingInterval);
+            }
+            
+            // Send ping every 2 seconds to measure true latency
+            pingInterval = setInterval(() => {
+                if (priceWs && priceWs.readyState === WebSocket.OPEN) {
+                    const pingTime = Date.now();
+                    priceWs.send(JSON.stringify({
+                        type: 'ping',
+                        pingId: pingTime,
+                        originalPingTime: pingTime,
+                        clientTime: pingTime
+                    }));
+                }
+            }, 2000);
+        }
+        
+        function disconnect() {
+            isConnected = false;
+            
+            if (pingInterval) {
+                clearInterval(pingInterval);
+                pingInterval = null;
+            }
+            
+            if (priceWs) {
+                priceWs.close();
+                priceWs = null;
+            }
+            if (settlementWs) {
+                settlementWs.close();
+                settlementWs = null;
+            }
+            updateStatus('priceStatus', false);
+            updateStatus('settlementStatus', false);
+            document.getElementById('connectBtn').textContent = 'Connect';
+        }
+
+        function updateStatus(elementId, connected) {
+            const statusEl = document.getElementById(elementId);
+            statusEl.className = `status ${connected ? 'connected' : 'disconnected'}`;
+            statusEl.textContent = connected ? 'Connected' : 'Disconnected';
+        }
+
+        // Filter data to only include last N seconds
+        function getRecentData(latencies, timeWindowMs = timeWindowMs) {
+            const now = Date.now();
+            return latencies.filter(d => (now - d.timestamp) <= timeWindowMs);
+        }
+
+        function calculateStats(latencies, useTimeWindow = true) {
+            const dataToUse = useTimeWindow ? getRecentData(latencies) : latencies;
+            
+            if (dataToUse.length === 0) {
+                return {
+                    current: null,
+                    avg: null,
+                    min: null,
+                    max: null,
+                    jitter: null,
+                    count: 0
+                };
+            }
+
+            const latest = dataToUse[dataToUse.length - 1];
+            const values = dataToUse.map(d => d.latency);
+            const avg = values.reduce((a, b) => a + b, 0) / values.length;
+            const min = Math.min(...values);
+            const max = Math.max(...values);
+            
+            // Calculate jitter (standard deviation of latency differences)
+            let jitter = 0;
+            if (values.length > 1) {
+                const differences = [];
+                for (let i = 1; i < values.length; i++) {
+                    differences.push(Math.abs(values[i] - values[i - 1]));
+                }
+                const avgDiff = differences.reduce((a, b) => a + b, 0) / differences.length;
+                const variance = differences.reduce((sum, diff) => sum + Math.pow(diff - avgDiff, 2), 0) / differences.length;
+                jitter = Math.sqrt(variance);
+            }
+
+            return {
+                current: latest.latency,
+                avg: avg,
+                min: min,
+                max: max,
+                jitter: jitter,
+                count: dataToUse.length
+            };
+        }
+
+        function getLatencyClass(latency) {
+            const displayLatency = Math.max(0, latency);
+            if (displayLatency < 50) return 'good';
+            if (displayLatency < 200) return 'warning';
+            return 'bad';
+        }
+
+        function updatePriceStats() {
+            const stats = calculateStats(priceLatencies, true);
+            
+            if (stats.current !== null) {
+                document.getElementById('currentLatency').textContent = `${stats.current.toFixed(2)} ms`;
+                document.getElementById('currentLatency').className = `stat-value ${getLatencyClass(stats.current)}`;
+            }
+            
+            if (stats.avg !== null) {
+                document.getElementById('avgLatency').textContent = `${stats.avg.toFixed(2)} ms`;
+                document.getElementById('avgLatency').className = `stat-value ${getLatencyClass(stats.avg)}`;
+            }
+            
+            if (stats.min !== null) {
+                document.getElementById('minLatency').textContent = `${stats.min.toFixed(2)} ms`;
+            }
+            
+            if (stats.max !== null) {
+                document.getElementById('maxLatency').textContent = `${stats.max.toFixed(2)} ms`;
+            }
+            
+            if (stats.jitter !== null) {
+                document.getElementById('jitter').textContent = `${stats.jitter.toFixed(2)} ms`;
+            }
+            
+            document.getElementById('messageCount').textContent = stats.count;
+            
+            // Update true latency display
+            const recentTrueLatency = trueLatencySamples.slice(-3);
+            if (recentTrueLatency.length > 0) {
+                const avgTrueLatency = recentTrueLatency.reduce((a, b) => a + b, 0) / recentTrueLatency.length;
+                document.getElementById('trueLatency').textContent = `${avgTrueLatency.toFixed(2)} ms`;
+            }
+        }
+
+        function updateSettlementStats() {
+            const stats = calculateStats(settlementLatencies, true);
+            
+            if (stats.current !== null) {
+                document.getElementById('settlementCurrentLatency').textContent = `${stats.current.toFixed(2)} ms`;
+                document.getElementById('settlementCurrentLatency').className = `stat-value ${getLatencyClass(stats.current)}`;
+            }
+            
+            if (stats.avg !== null) {
+                document.getElementById('settlementAvgLatency').textContent = `${stats.avg.toFixed(2)} ms`;
+                document.getElementById('settlementAvgLatency').className = `stat-value ${getLatencyClass(stats.avg)}`;
+            }
+            
+            if (stats.min !== null) {
+                document.getElementById('settlementMinLatency').textContent = `${stats.min.toFixed(2)} ms`;
+            }
+            
+            if (stats.max !== null) {
+                document.getElementById('settlementMaxLatency').textContent = `${stats.max.toFixed(2)} ms`;
+            }
+            
+            if (stats.jitter !== null) {
+                document.getElementById('settlementJitter').textContent = `${stats.jitter.toFixed(2)} ms`;
+            }
+            
+            document.getElementById('settlementCount').textContent = stats.count;
+        }
+
+        function updatePriceChart() {
+            const container = document.getElementById('priceChart');
+            container.innerHTML = '';
+            
+            if (priceLatencies.length === 0) return;
+            
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('width', '100%');
+            svg.setAttribute('height', '100%');
+            svg.setAttribute('viewBox', '0 0 1000 300');
+            
+            const data = getRecentData(priceLatencies);
+            
+            if (data.length === 0) return;
+            
+            const latencies = data.map(d => Math.max(0, d.latency));
+            const maxLatency = Math.max(...latencies);
+            const minLatency = Math.min(...latencies);
+            const range = maxLatency - minLatency || 100;
+            const padding = 40;
+            
+            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            let pathData = '';
+            
+            data.forEach((point, index) => {
+                const x = padding + (index / (data.length - 1)) * (1000 - 2 * padding);
+                const displayLatency = Math.max(0, point.latency);
+                const y = 300 - padding - ((displayLatency - minLatency) / range) * (300 - 2 * padding);
+                pathData += (index === 0 ? 'M' : 'L') + ` ${x} ${y}`;
+            });
+            
+            path.setAttribute('d', pathData);
+            path.setAttribute('stroke', '#4ade80');
+            path.setAttribute('stroke-width', '2');
+            path.setAttribute('fill', 'none');
+            
+            svg.appendChild(path);
+            container.appendChild(svg);
+        }
+
+        function updateSettlementChart() {
+            const container = document.getElementById('settlementChart');
+            container.innerHTML = '';
+            
+            if (settlementLatencies.length === 0) return;
+            
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('width', '100%');
+            svg.setAttribute('height', '100%');
+            svg.setAttribute('viewBox', '0 0 1000 300');
+            
+            const data = getRecentData(settlementLatencies);
+            
+            if (data.length === 0) return;
+            
+            const latencies = data.map(d => Math.max(0, d.latency));
+            const maxLatency = Math.max(...latencies);
+            const minLatency = Math.min(...latencies);
+            const range = maxLatency - minLatency || 100;
+            const padding = 40;
+            
+            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            let pathData = '';
+            
+            data.forEach((point, index) => {
+                const x = padding + (index / (data.length - 1)) * (1000 - 2 * padding);
+                const displayLatency = Math.max(0, point.latency);
+                const y = 300 - padding - ((displayLatency - minLatency) / range) * (300 - 2 * padding);
+                pathData += (index === 0 ? 'M' : 'L') + ` ${x} ${y}`;
+            });
+            
+            path.setAttribute('d', pathData);
+            path.setAttribute('stroke', '#ff00ff');
+            path.setAttribute('stroke-width', '2');
+            path.setAttribute('fill', 'none');
+            
+            svg.appendChild(path);
+            container.appendChild(svg);
+        }
+
+        function updatePriceTable(latencyData) {
+            const recentData = getRecentData(priceLatencies);
+            const tableBody = document.getElementById('priceTableBody');
+            if (tableBody) {
+                tableBody.innerHTML = '';
+                recentData.slice().reverse().forEach(data => {
+                    const displayLatency = Math.max(0, data.latency);
+                    let latencyClass = 'low-latency';
+                    if (displayLatency > 200) latencyClass = 'high-latency';
+                    else if (displayLatency > 50) latencyClass = 'medium-latency';
+                    
+                    const row = document.createElement('div');
+                    row.className = `table-row ${latencyClass}`;
+                    row.innerHTML = `
+                        <div>${new Date(data.timestamp).toLocaleTimeString()}</div>
+                        <div>${displayLatency.toFixed(2)} ms</div>
+                        <div>$${data.price.toFixed(6)}</div>
+                        <div>${new Date(data.serverTimestamp).toLocaleTimeString()}</div>
+                    `;
+                    tableBody.appendChild(row);
+                });
+            }
+        }
+
+        function updateSettlementTable(latencyData) {
+            const recentData = getRecentData(settlementLatencies);
+            const tableBody = document.getElementById('settlementTableBody');
+            
+            if (tableBody) {
+                tableBody.innerHTML = '';
+                recentData.slice().reverse().forEach(data => {
+                    const displayLatency = Math.max(0, data.latency);
+                    let latencyClass = 'low-latency';
+                    if (displayLatency > 200) latencyClass = 'high-latency';
+                    else if (displayLatency > 50) latencyClass = 'medium-latency';
+                    
+                    const row = document.createElement('div');
+                    row.className = `table-row ${latencyClass}`;
+                    row.innerHTML = `
+                        <div>${new Date(data.timestamp).toLocaleTimeString()}</div>
+                        <div>${displayLatency.toFixed(2)} ms</div>
+                        <div>$${data.twap}</div>
+                        <div>${data.periodId}</div>
+                    `;
+                    tableBody.appendChild(row);
+                });
+            }
+        }
+
+        function clearData() {
+            priceLatencies.length = 0;
+            settlementLatencies.length = 0;
+            trueLatencySamples.length = 0;
+            priceClockSkew = 0;
+            priceClockSkewSamples = [];
+            settlementClockSkew = 0;
+            settlementClockSkewSamples = [];
+            document.getElementById('priceTableBody').innerHTML = '';
+            document.getElementById('settlementTableBody').innerHTML = '';
+            document.getElementById('trueLatency').textContent = '-- ms';
+            updatePriceStats();
+            updateSettlementStats();
+            updatePriceChart();
+            updateSettlementChart();
+        }
+
+        function exportData() {
+            const csv = [
+                ['Type', 'Latency (ms)', 'Client Time', 'Server Time', 'Price/TWAP', 'Period ID'],
+                ...priceLatencies.map(d => [
+                    'Price',
+                    Math.max(0, d.latency).toFixed(2),
+                    new Date(d.timestamp).toISOString(),
+                    new Date(d.serverTimestamp).toISOString(),
+                    d.price,
+                    ''
+                ]),
+                ...settlementLatencies.map(d => [
+                    'Settlement',
+                    Math.max(0, d.latency).toFixed(2),
+                    new Date(d.timestamp).toISOString(),
+                    new Date(d.serverTimestamp).toISOString(),
+                    d.twap,
+                    d.periodId
+                ])
+            ].map(row => row.join(',')).join('\n');
+            
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `latency-test-${Date.now()}.csv`;
+            a.click();
+            window.URL.revokeObjectURL(url);
+        }
+
+        // Allow Enter key to connect
+        document.getElementById('wsUrl').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                toggleConnection();
+            }
+        });
+
+        // Periodically refresh display to remove old data
+        setInterval(() => {
+            if (isConnected) {
+                updatePriceStats();
+                updateSettlementStats();
+                updatePriceChart();
+                updateSettlementChart();
+                
+                // Rebuild tables with only recent data
+                const recentPriceData = getRecentData(priceLatencies);
+                if (recentPriceData.length > 0) {
+                    const tableBody = document.getElementById('priceTableBody');
+                    if (tableBody) {
+                        tableBody.innerHTML = '';
+                        recentPriceData.slice().reverse().forEach(data => {
+                            const displayLatency = Math.max(0, data.latency);
+                            let latencyClass = 'low-latency';
+                            if (displayLatency > 200) latencyClass = 'high-latency';
+                            else if (displayLatency > 50) latencyClass = 'medium-latency';
+                            
+                            const row = document.createElement('div');
+                            row.className = `table-row ${latencyClass}`;
+                            row.innerHTML = `
+                                <div>${new Date(data.timestamp).toLocaleTimeString()}</div>
+                                <div>${displayLatency.toFixed(2)} ms</div>
+                                <div>$${data.price.toFixed(6)}</div>
+                                <div>${new Date(data.serverTimestamp).toLocaleTimeString()}</div>
+                            `;
+                            tableBody.appendChild(row);
+                        });
+                    }
+                }
+                
+                const recentSettlementData = getRecentData(settlementLatencies);
+                if (recentSettlementData.length > 0) {
+                    const tableBody = document.getElementById('settlementTableBody');
+                    if (tableBody) {
+                        tableBody.innerHTML = '';
+                        recentSettlementData.slice().reverse().forEach(data => {
+                            const displayLatency = Math.max(0, data.latency);
+                            let latencyClass = 'low-latency';
+                            if (displayLatency > 200) latencyClass = 'high-latency';
+                            else if (displayLatency > 50) latencyClass = 'medium-latency';
+                            
+                            const row = document.createElement('div');
+                            row.className = `table-row ${latencyClass}`;
+                            row.innerHTML = `
+                                <div>${new Date(data.timestamp).toLocaleTimeString()}</div>
+                                <div>${displayLatency.toFixed(2)} ms</div>
+                                <div>$${data.twap}</div>
+                                <div>${data.periodId}</div>
+                            `;
+                            tableBody.appendChild(row);
+                        });
+                    }
+                }
+            }
+        }, 1000); // Update every second
+    </script>
+</body>
+</html>

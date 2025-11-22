@@ -1,0 +1,262 @@
+.tradingPanel {
+  background: linear-gradient(135deg, rgba(26, 26, 30, 0.95), rgba(18, 18, 22, 0.95));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  padding: 24px;
+  margin: 20px 0;
+  backdrop-filter: blur(10px);
+}
+
+.panelHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.panelHeader h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: #eeedec;
+}
+
+.sessionBadge {
+  background: rgba(0, 255, 36, 0.1);
+  color: #00ff24;
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid rgba(0, 255, 36, 0.3);
+}
+
+.warning {
+  padding: 12px;
+  background: rgba(255, 165, 0, 0.1);
+  border: 1px solid rgba(255, 165, 0, 0.3);
+  border-radius: 8px;
+  color: #ffa500;
+  font-size: 14px;
+  margin-bottom: 20px;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.formGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.formGroup label {
+  color: #eeedec;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.formGroup input {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 12px;
+  color: #eeedec;
+  font-size: 16px;
+  transition: all 0.3s ease;
+}
+
+.formGroup input:focus {
+  outline: none;
+  border-color: #00ff24;
+  box-shadow: 0 0 0 2px rgba(0, 255, 36, 0.1);
+}
+
+.hint {
+  color: #666;
+  font-size: 12px;
+}
+
+.amountDisplay {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.amountValue {
+  color: #00ff24;
+  font-size: 20px;
+  font-weight: 600;
+  font-family: 'Geist Mono';
+}
+
+.amountHint {
+  color: #999;
+  font-size: 12px;
+}
+
+.amountWarning {
+  background: rgba(255, 165, 0, 0.1);
+  border: 1px solid rgba(255, 165, 0, 0.3);
+  border-radius: 8px;
+  padding: 10px;
+  color: #ffa500;
+  font-size: 13px;
+  margin-top: 8px;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+.priceRange {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.quickFill {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 8px;
+}
+
+.quickLabel {
+  color: #999;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.quickBtn {
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: #eeedec;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.quickBtn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.submitButton {
+  padding: 16px;
+  background: linear-gradient(135deg, #00ff24, #00cc1f);
+  color: #000;
+  border: none;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 20px rgba(0, 255, 36, 0.3);
+}
+
+.submitButton:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 24px rgba(0, 255, 36, 0.4);
+}
+
+.submitButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background: #666;
+}
+
+.error {
+  padding: 12px;
+  background: rgba(255, 70, 70, 0.1);
+  border: 1px solid rgba(255, 70, 70, 0.3);
+  border-radius: 8px;
+  color: #ff4646;
+  font-size: 14px;
+}
+
+.success {
+  padding: 12px;
+  background: rgba(0, 255, 36, 0.1);
+  border: 1px solid rgba(0, 255, 36, 0.3);
+  border-radius: 8px;
+  color: #00ff24;
+  font-size: 14px;
+}
+
+.history {
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.history h4 {
+  margin: 0 0 16px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #eeedec;
+}
+
+.historyList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.historyItem {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.historyRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.historyLabel {
+  color: #999;
+  font-size: 13px;
+}
+
+.historyValue {
+  color: #eeedec;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.txLink {
+  color: #00ff24;
+  text-decoration: none;
+  font-size: 13px;
+  font-family: 'Geist Mono';
+}
+
+.txLink:hover {
+  text-decoration: underline;
+}
+
+
