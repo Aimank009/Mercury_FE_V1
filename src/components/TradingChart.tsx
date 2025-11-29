@@ -155,6 +155,20 @@ export default function TradingChart({
             return null;
           }
           
+          console.log(`✅ Database updated successfully for bet ${bet.event_id}`);
+          
+          // Trigger positions table refresh
+          if (typeof window !== 'undefined') {
+            try {
+              window.dispatchEvent(new CustomEvent('positionsUpdated', {
+                detail: { eventId: bet.event_id, status: newStatus, multiplier: finalMultiplier }
+              }));
+              console.log('📢 Dispatched positionsUpdated event');
+            } catch (dispatchError) {
+              console.error('❌ Error dispatching event:', dispatchError);
+            }
+          }
+          
           // Update UI (reuse cellKey and existingBet from above)
           if (existingBet) {
             existingBet.status = newStatus;
@@ -3226,7 +3240,7 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
           width: "100%",
           height: "100%",
           display: "block",
-          background: "#141414",
+          background: "transparent",
           cursor: 'default',
         }}
       />

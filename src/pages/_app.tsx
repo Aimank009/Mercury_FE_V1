@@ -26,8 +26,68 @@ const client = new QueryClient({
   },
 });
 
+// Set up error handlers IMMEDIATELY (before any component renders)
+if (typeof window !== 'undefined') {
+  // Handle unhandled promise rejections (from Coinbase SDK analytics)
+  const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+    const reason = event.reason;
+    const errorMessage = reason?.message || reason?.toString() || '';
+    const errorString = String(reason || '');
+    
+    // Silently ignore Coinbase analytics errors
+    if (
+      errorMessage.includes('cca-lite.coinbase.com') ||
+      errorMessage.includes('ERR_BLOCKED_BY_CLIENT') ||
+      errorMessage.includes('net::ERR_BLOCKED_BY_CLIENT') ||
+      errorMessage.includes('Failed to fetch') ||
+      errorMessage.includes('Analytics SDK') ||
+      errorMessage.includes('AnalyticsSDKApiError') ||
+      errorString.includes('cca-lite.coinbase.com') ||
+      errorString.includes('ERR_BLOCKED_BY_CLIENT') ||
+      errorString.includes('Failed to fetch') ||
+      errorString.includes('Analytics SDK')
+    ) {
+      event.preventDefault(); // Prevent the error from crashing the app
+      return;
+    }
+  };
+
+  // Handle global errors
+  const handleError = (event: ErrorEvent) => {
+    const message = event.message || '';
+    const filename = event.filename || '';
+    const error = event.error;
+    const errorMessage = error?.message || '';
+    const errorString = String(error || '');
+    
+    // Silently ignore Coinbase analytics errors
+    if (
+      message.includes('cca-lite.coinbase.com') ||
+      message.includes('ERR_BLOCKED_BY_CLIENT') ||
+      message.includes('net::ERR_BLOCKED_BY_CLIENT') ||
+      message.includes('Failed to fetch') ||
+      message.includes('Analytics SDK') ||
+      message.includes('AnalyticsSDKApiError') ||
+      filename.includes('cca-lite.coinbase.com') ||
+      errorMessage.includes('cca-lite.coinbase.com') ||
+      errorMessage.includes('ERR_BLOCKED_BY_CLIENT') ||
+      errorMessage.includes('Failed to fetch') ||
+      errorMessage.includes('Analytics SDK') ||
+      errorString.includes('cca-lite.coinbase.com') ||
+      errorString.includes('Failed to fetch')
+    ) {
+      event.preventDefault(); // Prevent the error from crashing the app
+      return;
+    }
+  };
+
+  // Add event listeners immediately
+  window.addEventListener('unhandledrejection', handleUnhandledRejection);
+  window.addEventListener('error', handleError);
+}
+
 function MyApp({ Component, pageProps }: AppProps) {
-  // Suppress WalletConnect and Reown warnings
+  // Suppress WalletConnect, Reown, and Coinbase analytics errors in console
   useEffect(() => {
     const originalConsoleError = console.error;
     const originalConsoleWarn = console.warn;
@@ -35,11 +95,17 @@ function MyApp({ Component, pageProps }: AppProps) {
 
     console.error = (...args: any[]) => {
       const message = args[0]?.toString() || '';
-      // Filter out WalletConnect/Reown noise
+      // Filter out WalletConnect/Reown/Coinbase analytics noise
       if (
         message.includes('WalletConnect Core is already initialized') ||
         message.includes('Failed to fetch remote project configuration') ||
-        message.includes('Reown Config')
+        message.includes('Reown Config') ||
+        message.includes('cca-lite.coinbase.com') ||
+        message.includes('ERR_BLOCKED_BY_CLIENT') ||
+        message.includes('net::ERR_BLOCKED_BY_CLIENT') ||
+        message.includes('Analytics SDK') ||
+        message.includes('AnalyticsSDKApiError') ||
+        message.includes('Failed to fetch')
       ) {
         return;
       }
@@ -50,7 +116,10 @@ function MyApp({ Component, pageProps }: AppProps) {
       const message = args[0]?.toString() || '';
       if (
         message.includes('WalletConnect') ||
-        message.includes('Reown')
+        message.includes('Reown') ||
+        message.includes('cca-lite.coinbase.com') ||
+        message.includes('ERR_BLOCKED_BY_CLIENT') ||
+        message.includes('Analytics SDK')
       ) {
         return;
       }
@@ -61,7 +130,9 @@ function MyApp({ Component, pageProps }: AppProps) {
       const message = args[0]?.toString() || '';
       if (
         message.includes('WalletConnect Core is already initialized') ||
-        message.includes('Reown Config')
+        message.includes('Reown Config') ||
+        message.includes('cca-lite.coinbase.com') ||
+        message.includes('Analytics SDK')
       ) {
         return;
       }
@@ -74,6 +145,7 @@ function MyApp({ Component, pageProps }: AppProps) {
       console.log = originalConsoleLog;
     };
   }, []);
+
   return (
     <div style={{ fontFamily: GeistMono.style.fontFamily }}>
       <style jsx global>{`

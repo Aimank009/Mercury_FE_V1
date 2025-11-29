@@ -1,6 +1,6 @@
 /* Main chart container */
 .chartContainer {
-  background: #141414;
+  background: transparent;
   border: none;
   padding: 0;
   color: rgba(238, 237, 236, 1);
@@ -44,7 +44,7 @@
   position: relative;
   flex: 1;
   overflow: hidden;
-  background: #141414;
+  background: transparent;
 }
 
 /* Center line - YELLOW VERTICAL */

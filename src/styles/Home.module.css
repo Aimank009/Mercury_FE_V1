@@ -8,12 +8,17 @@
 
 .tradingContainer {
   position: relative;
-  margin-top: 5px;
-  margin-bottom: 10px;
-  width: 99%;
+  width: 100%;
   max-width: 1900px;
   margin-left: auto;
   margin-right: auto;
+  background: linear-gradient(to bottom, 
+    #011b04 0%,      /* Navbar color - starts here */
+    #001705 7.5%,    /* TradingInfo color - approximately 64px height */
+    #001705 8%,      /* End of TradingInfo */
+    #011002 8.5%,    /* Start of chart gradient */
+    #000000 100%     /* End of chart - black */
+  );
 }
 
 .main {
@@ -21,7 +26,7 @@
   display: flex;
   flex-direction: column;
   position: relative;
-  background: #141414;
+  background: transparent;
   border: 1px solid #272727;
   height: 720px;
   overflow: hidden;

@@ -58,6 +58,8 @@ export function SessionTradingProvider({ children }: SessionTradingProviderProps
         })
         .catch((err) => {
           console.error('❌ Failed to connect SDK:', err);
+          // Don't crash - just log the error and continue
+          setIsReady(true); // Still mark as ready so app doesn't hang
         });
     } else {
       setIsReady(true);

@@ -5,7 +5,6 @@ import { useAccount, useSwitchChain } from 'wagmi';
 import Navbar from '../components/Navbar';
 import TradingInfo from '../components/TradingInfo';
 import TradingChart from '../components/TradingChart';
-import AmountModal from '../components/AmountModal';
 import Positions from '../components/Positions';
 import TermsModal from '../components/TermsModal';
 import TutorialModal from '../components/TutorialModal';
@@ -190,7 +189,6 @@ const Home: NextPage = () => {
                     }
                   }}
                 />
-                <AmountModal />
               </div>
             </main>
           </div>

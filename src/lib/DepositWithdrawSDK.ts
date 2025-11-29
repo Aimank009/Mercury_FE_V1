@@ -109,8 +109,16 @@ export class DepositWithdrawSDK {
     };
     
     this.provider = new ethers.providers.Web3Provider(window.ethereum, network);
-    await (this.provider as any).send('eth_requestAccounts', []);
-    this.signer = (this.provider as any).getSigner();
+    
+    // Request accounts - this may return empty if user hasn't connected
+    const accounts = await (this.provider as any).send('eth_requestAccounts', []);
+    
+    // Check if user actually connected (not just rejected or no accounts)
+    if (!accounts || accounts.length === 0) {
+      throw new Error('Please connect your wallet in MetaMask to continue.');
+    }
+    
+    this.signer = (this.provider as any).getSigner(0);
     this.userAddress = await this.signer!.getAddress();
 
     // Get current chain ID from wallet

@@ -172,8 +172,16 @@ export class SessionTradingSDK {
         }
 
         this.provider = new ethers.providers.Web3Provider(window.ethereum as any);
-        await this.provider.send('eth_requestAccounts', []);
-        this.signer = this.provider.getSigner();
+        
+        // Request accounts - this may return empty if user hasn't connected
+        const accounts = await this.provider.send('eth_requestAccounts', []);
+        
+        // Check if user actually connected (not just rejected or no accounts)
+        if (!accounts || accounts.length === 0) {
+          throw new Error('Please connect your wallet in MetaMask to continue.');
+        }
+        
+        this.signer = this.provider.getSigner(0);
         this.userAddress = await this.signer.getAddress();
         
         // Initialize contract for nonce fetching
@@ -615,9 +623,16 @@ export class SessionTradingSDK {
             throw new Error('Please install MetaMask!');
         }
 
-        await window.ethereum.request({ method: 'eth_requestAccounts' });
+        // Request accounts - this may return empty if user hasn't connected
+        const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+        
+        // Check if user actually connected
+        if (!accounts || accounts.length === 0) {
+          throw new Error('Please connect your wallet in MetaMask to continue.');
+        }
+        
         const provider = new ethers.providers.Web3Provider(window.ethereum as any);
-        const userSigner = provider.getSigner();
+        const userSigner = provider.getSigner(0);
         const userAddress = await userSigner.getAddress();
         
         console.log('✅ Connected!');

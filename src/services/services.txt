@@ -1,0 +1,6 @@
+ services/
+│   ├── trading/
+│   │   ├── settlementService.ts        # Settlement business logic
+│   │   ├── betService.ts               # Bet CRUD operations
+│   │   └── multiplierService.ts        # Multiplier calculations
+│

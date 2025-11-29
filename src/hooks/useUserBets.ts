@@ -1,9 +1,10 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useAccount } from 'wagmi';
-import { InfiniteData, useInfiniteQuery, useQueryClient,keepPreviousData } from '@tanstack/react-query';
+import { InfiniteData, useInfiniteQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { supabase, BetPlacedWithSession } from '../lib/supabaseClient';
-import { TABLES, QUERY_LIMITS, CACHE_EXPIRY } from '../config';
-import { storage, formatNumber, formatUSD, formatMultiplier } from '../utils';
+import { TABLES, CACHE_EXPIRY } from '../config';
+import { storage, formatUSD } from '../utils';
+import { getMercuryWebSocketClient, BetEvent } from '../lib/mercuryWebSocket';
 
 export interface Position {
   id: string;
@@ -20,6 +21,33 @@ export interface Position {
 }
 
 const BATCH_SIZE = 50; // Load 50 bets per batch
+
+// Create optimistic bet from order placed event
+function createOptimisticBet(
+  detail: { timeperiodId: number; priceMinUSD: number; priceMaxUSD: number; amountUSD: number },
+  userAddress: string
+): BetPlacedWithSession {
+  const now = new Date();
+  return {
+    id: 0,
+    event_id: `opt_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    user_address: userAddress.toLowerCase(),
+    session_key: '',
+    timeperiod_id: detail.timeperiodId.toString(),
+    grid_id: '',
+    amount: (detail.amountUSD * 1e6).toString(),
+    shares_received: '0',
+    price_min: (detail.priceMinUSD * 1e8).toString(),
+    price_max: (detail.priceMaxUSD * 1e8).toString(),
+    start_time: detail.timeperiodId.toString(),
+    end_time: ((detail.timeperiodId + 5) * 1000).toString(),
+    block_number: null,
+    timestamp: now.toISOString(),
+    created_at: now.toISOString(),
+    status: 'pending',
+  };
+}
+
 function formatOptimisticPosition(bet: BetPlacedWithSession): Position {
   const amountUSD = formatUSD(parseFloat(bet.amount || '0') / 1e6);
   const priceMin = formatUSD(parseFloat(bet.price_min || '0') / 1e8);
@@ -116,21 +144,22 @@ async function formatPositions(data: BetPlacedWithSession[]): Promise<Position[]
     const betStatus = bet.status || 'pending';
     const dbMultiplier = bet.multiplier ? parseFloat(bet.multiplier.toString()) : 0;
     
+    // PRIORITY 1: Check if bet status is already determined in DB
     if (betStatus === 'won') {
       settlementStatus = 'win';
       settlementPrice = bet.settlement_price 
-        ? formatUSD(parseFloat(bet.settlement_price) / 1e8)
+        ? formatUSD(parseFloat(bet.settlement_price.toString()) / 1e8)
         : null;
-      const payoutAmount = parseFloat(amountUSD) * dbMultiplier;
+      const payoutAmount = parseFloat(amountUSD) * (dbMultiplier > 0 ? dbMultiplier : 1);
       potentialPayout = formatUSD(payoutAmount);
-      multiplier = dbMultiplier > 0 ? ` ${dbMultiplier.toFixed(1)}X` : '';
+      multiplier = dbMultiplier > 0 ? ` ${dbMultiplier.toFixed(1)}X` : ' 1.0X';
     } else if (betStatus === 'lost') {
       settlementStatus = 'Loss';
       settlementPrice = bet.settlement_price 
-        ? formatUSD(parseFloat(bet.settlement_price) / 1e8)
+        ? formatUSD(parseFloat(bet.settlement_price.toString()) / 1e8)
         : null;
       potentialPayout = formatUSD(0);
-      multiplier = '';
+      multiplier = ' 0.0X';
     } else {
       const settlement = settlementsMap.get(bet.timeperiod_id);
       if (!settlement) {
@@ -176,10 +205,16 @@ async function formatPositions(data: BetPlacedWithSession[]): Promise<Position[]
 }
 
 // Fetch a single batch of bets
-async function fetchBetsBatch({ pageParam = 0 }): Promise<{ data: Position[]; nextCursor: number | null }> {
+async function fetchBetsBatch({ 
+  pageParam = 0, 
+  userAddress 
+}: { 
+  pageParam?: number; 
+  userAddress?: string | null 
+}): Promise<{ data: Position[]; nextCursor: number | null }> {
   // Check if Supabase is configured
-  if (!supabase) {
-    throw new Error('Supabase client is not initialized. Please check your environment variables.');
+  if (!supabase || !userAddress) {
+    return { data: [], nextCursor: null };
   }
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -189,41 +224,103 @@ async function fetchBetsBatch({ pageParam = 0 }): Promise<{ data: Position[]; ne
   }
 
   const offset = pageParam * BATCH_SIZE;
-  console.log(`🔍 Fetching batch (offset: ${offset}, limit: ${BATCH_SIZE})...`);
+  console.log(`🔍 Fetching batch (offset: ${offset}, limit: ${BATCH_SIZE}) for user: ${userAddress}...`);
 
-  const { data, error } = await supabase
-    .from(TABLES.BET_PLACED_WITH_SESSION)
-    .select('*')
-    .order('created_at', { ascending: false })
-    .range(offset, offset + BATCH_SIZE - 1);
+  try {
+    const { data, error, count } = await supabase
+      .from(TABLES.BET_PLACED_WITH_SESSION)
+      .select('*', { count: 'exact' })
+      .ilike('user_address', userAddress) // Use ilike for case-insensitive matching
+      .order('created_at', { ascending: false })
+      .range(offset, offset + BATCH_SIZE - 1);
 
-  if (error) {
-    console.error('❌ Supabase query error:', error);
-    if (error.message?.includes('fetch') || error.message?.includes('Failed to fetch')) {
-      console.warn('⚠️ Network error - running in demo mode without positions');
+    if (error) {
+      console.error('❌ Supabase query error:', error);
+      if (error.message?.includes('fetch') || error.message?.includes('Failed to fetch')) {
+        console.warn('⚠️ Network error - running in demo mode without positions');
+        return { data: [], nextCursor: null };
+      }
+      throw new Error(error.message);
+    }
+
+    console.log(`📦 Query result:`, { 
+      dataLength: data?.length || 0, 
+      totalCount: count,
+      userAddress: userAddress.toLowerCase(),
+      firstBet: data?.[0] ? {
+        event_id: data[0].event_id,
+        user_address: data[0].user_address,
+        created_at: data[0].created_at,
+      } : null
+    });
+
+    if (!data || data.length === 0) {
+      console.log('⚠️ No bets found for user:', userAddress.toLowerCase());
+      // Check if there are ANY bets in the table (debug)
+      const { count: totalBets } = await supabase
+        .from(TABLES.BET_PLACED_WITH_SESSION)
+        .select('*', { count: 'exact', head: true });
+      console.log(`📊 Total bets in database: ${totalBets || 0}`);
+      
+      // Check what addresses are actually in the database
+      const { data: sampleAddresses } = await supabase
+        .from(TABLES.BET_PLACED_WITH_SESSION)
+        .select('user_address')
+        .limit(10);
+      console.log('📝 Sample addresses in DB:', sampleAddresses?.map(b => b.user_address));
+      
+      // Try case-insensitive search
+      const { data: caseInsensitiveData, count: caseInsensitiveCount } = await supabase
+        .from(TABLES.BET_PLACED_WITH_SESSION)
+        .select('*', { count: 'exact' })
+        .ilike('user_address', userAddress.toLowerCase())
+        .order('created_at', { ascending: false })
+        .limit(5);
+      
+      console.log(`🔍 Case-insensitive search found ${caseInsensitiveCount || 0} bets`);
+      if (caseInsensitiveData && caseInsensitiveData.length > 0) {
+        console.log('✅ Found bets with case-insensitive search! Using those instead...');
+        const formattedPositions = await formatPositions(caseInsensitiveData);
+        return { data: formattedPositions, nextCursor: null };
+      }
+      
       return { data: [], nextCursor: null };
     }
-    throw new Error(error.message);
+
+    console.log(`✅ Fetched ${data.length} bets (total: ${count || 'unknown'})`);
+
+    const formattedPositions = await formatPositions(data);
+    
+    // Check if there are more batches
+    const hasMore = data.length === BATCH_SIZE;
+    const nextCursor = hasMore ? pageParam + 1 : null;
+
+    console.log(`✅ Formatted ${formattedPositions.length} positions, hasMore: ${hasMore}`);
+    
+    // Log settlement statuses for debugging
+    const statusBreakdown = formattedPositions.reduce((acc, p) => {
+      acc[p.settlement.status] = (acc[p.settlement.status] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+    console.log('📊 Status breakdown:', statusBreakdown);
+
+    return { data: formattedPositions, nextCursor };
+  } catch (error: any) {
+    console.error('❌ Fatal error in fetchBetsBatch:', error);
+    throw error;
   }
-
-  if (!data || data.length === 0) {
-    return { data: [], nextCursor: null };
-  }
-
-  const formattedPositions = await formatPositions(data);
-  
-  // Check if there are more batches
-  const hasMore = data.length === BATCH_SIZE;
-  const nextCursor = hasMore ? pageParam + 1 : null;
-
-  console.log(`✅ Fetched batch: ${formattedPositions.length} positions, hasMore: ${hasMore}`);
-
-  return { data: formattedPositions, nextCursor };
 }
 
 export function useUserBets() {
-  const { address, isConnected } = useAccount();
+  const { address } = useAccount();
   const queryClient = useQueryClient();
+  const wsClient = useRef(getMercuryWebSocketClient()).current;
+  const fallbackTimerRef = useRef<NodeJS.Timeout>();
+
+  const queryKey = useMemo(() => 
+    ['userBets', address?.toLowerCase() || 'none'],
+    [address]
+  );
 
   const {
     data,
@@ -235,42 +332,88 @@ export function useUserBets() {
     error,
     refetch,
   } = useInfiniteQuery({
-    queryKey: ['userBets', 'all'],
-    queryFn: fetchBetsBatch,
+    queryKey,
+    queryFn: ({ pageParam }) => {
+      console.log('🔍 Query function called with:', { pageParam, address });
+      return fetchBetsBatch({ pageParam, userAddress: address });
+    },
     initialPageParam: 0,
     getNextPageParam: (lastPage) => lastPage.nextCursor,
-    staleTime: 30_000, // Consider data fresh for 30 seconds
-    gcTime: 5 * 60 * 1000, // Keep in cache for 5 minutes
-    placeholderData: keepPreviousData,
+    staleTime: 10_000, // 10s stale time for faster background updates
+    gcTime: 10 * 60 * 1000, // 10 min cache
+    placeholderData: keepPreviousData, // Keep old data visible while fetching
+    refetchOnWindowFocus: false, // Don't refetch on window focus
+    enabled: !!address, // Only fetch when user is connected
   });
 
   // Flatten all pages into a single array
-  const positions = data?.pages.flatMap(page => page.data) ?? [];
+  const positions = useMemo(() => 
+    data?.pages.flatMap(page => page.data) ?? [], 
+    [data]
+  );
+
+  // Debug logging
+  useEffect(() => {
+    if (address) {
+      console.log('📊 useUserBets state:', {
+        address,
+        isLoading,
+        isFetching,
+        hasData: !!data,
+        pagesCount: data?.pages?.length || 0,
+        totalPositions: positions.length,
+        error: error?.message,
+      });
+    }
+  }, [address, isLoading, isFetching, data, positions.length, error]);
+
+  // Optimistic update
+  const addOptimisticBet = useCallback((detail: any) => {
+    if (!address) return;
+
+    const optimisticBet = createOptimisticBet(detail, address);
+    const optimisticPosition = formatOptimisticPosition(optimisticBet);
+
+    queryClient.setQueryData<InfiniteData<{ data: Position[]; nextCursor: number | null }>>(
+      queryKey,
+      (oldData) => ({
+        pages: oldData?.pages.map((page, i) => 
+          i === 0 
+            ? { 
+                ...page, 
+                data: [optimisticPosition, ...page.data.filter(p => !p.id.startsWith('opt_'))].slice(0, BATCH_SIZE) 
+              }
+            : page
+        ) || [{ data: [optimisticPosition], nextCursor: null }],
+        pageParams: oldData?.pageParams || [0],
+      })
+    );
+  }, [address, queryClient, queryKey]);
 
   const upsertPositionInCache = useCallback((updatedPosition: Position) => {
+    if (!address) return;
+
     queryClient.setQueryData<InfiniteData<{ data: Position[]; nextCursor: number | null }>>(
-      ['userBets', 'all'],
-      (oldData) => {
-        if (!oldData) return oldData;
-
-        const newPages = oldData.pages.map((page, pageIndex) => {
-          const filtered = page.data.filter(position => position.id !== updatedPosition.id);
-          if (pageIndex === 0) {
-            const nextData = [updatedPosition, ...filtered].slice(0, BATCH_SIZE);
-            return { ...page, data: nextData };
-          }
-          return { ...page, data: filtered };
-        });
-
-        return { ...oldData, pages: newPages };
-      }
+      queryKey,
+      (oldData) => oldData ? ({
+        ...oldData,
+        pages: oldData.pages.map((page, i) => ({
+          ...page,
+          data: i === 0
+            ? [updatedPosition, ...page.data.filter(p => 
+                p.id !== updatedPosition.id && 
+                !(p.id.startsWith('opt_') && p.timeperiodId === updatedPosition.timeperiodId)
+              )].slice(0, BATCH_SIZE)
+            : page.data.filter(p => p.id !== updatedPosition.id)
+        }))
+      }) : oldData
     );
-  }, [queryClient]);
+  }, [queryClient, queryKey, address]);
 
   const removePositionFromCache = useCallback((positionId?: string) => {
-    if (!positionId) return;
+    if (!positionId || !address) return;
     queryClient.setQueryData<InfiniteData<{ data: Position[]; nextCursor: number | null }>>(
-      ['userBets', 'all'],
+      queryKey,
       (oldData) => {
         if (!oldData) return oldData;
         const newPages = oldData.pages.map(page => ({
@@ -280,7 +423,7 @@ export function useUserBets() {
         return { ...oldData, pages: newPages };
       }
     );
-  }, [queryClient]);
+  }, [queryClient, queryKey, address]);
 
   const hydrateRealtimeBet = useCallback(async (bet: BetPlacedWithSession | null) => {
     if (!bet) return;
@@ -327,25 +470,25 @@ export function useUserBets() {
 
   // Cache first batch for instant load on next visit
   useEffect(() => {
-    if (data?.pages[0]?.data && data.pages[0].data.length > 0) {
+    if (data?.pages[0]?.data && data.pages[0].data.length > 0 && address) {
       try {
-        const cacheKey = 'mercury_cached_positions_all';
-        const cacheTimeKey = 'mercury_positions_cache_time_all';
+        const cacheKey = `mercury_cached_positions_${address.toLowerCase()}`;
+        const cacheTimeKey = `mercury_positions_cache_time_${address.toLowerCase()}`;
         storage.set(cacheKey, JSON.stringify(data.pages[0].data));
         storage.set(cacheTimeKey, Date.now().toString());
       } catch (error) {
         console.error('Error caching positions:', error);
       }
     }
-  }, [data?.pages]);
+  }, [data?.pages, address]);
 
   // Restore from cache on mount
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined' || !address) return;
     
     try {
-      const cacheKey = 'mercury_cached_positions_all';
-      const cacheTimeKey = 'mercury_positions_cache_time_all';
+      const cacheKey = `mercury_cached_positions_${address.toLowerCase()}`;
+      const cacheTimeKey = `mercury_positions_cache_time_${address.toLowerCase()}`;
       
       const cachedPositions = storage.get<string>(cacheKey);
       const cacheTimestamp = storage.get<string>(cacheTimeKey);
@@ -360,70 +503,193 @@ export function useUserBets() {
     } catch (error) {
       console.error('Error loading cached positions:', error);
     }
-  }, []);
+  }, [address]);
 
-  // Set up realtime subscriptions
+  // WebSocket + Fallback Strategy
   useEffect(() => {
-    if (!supabase) return;
+    if (!address) return;
 
-    const betsChannel = supabase
-      .channel('bet_placed_changes')
-      .on('postgres_changes' as any, {
-        event: '*',
-        schema: 'public',
-        table: 'bet_placed_with_session',
-      }, async (payload) => {
-        console.log('🔔 Real-time update received:', payload);
-        try {
+    let wsConnected = false;
+    let fallbackActive = false;
+    let fallbackChannel: any = null;
+
+    // Layer 1: Optimistic updates (instant)
+    const handleOrderPlaced = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      console.log('📢 orderPlaced event - adding optimistic bet');
+      addOptimisticBet(detail);
+    };
+
+    // Layer 2: Mercury WebSocket (primary, <100ms)
+    const setupWebSocket = async () => {
+      try {
+        await wsClient.connect();
+        wsConnected = true;
+        
+        // Subscribe to user's bets only
+        wsClient.subscribe({
+          tables: ['bet_placed_with_session'],
+          events: ['INSERT', 'UPDATE'],
+        });
+
+        // Handle WebSocket events
+        const unsubEvent = wsClient.onEvent(async (event: BetEvent) => {
+          // Only process if it's for this user
+          if (event.new?.user_address?.toLowerCase() !== address.toLowerCase()) {
+            return;
+          }
+
+          console.log('📨 WebSocket bet update for user:', event.new.user_address);
+          const formatted = await formatPositions([event.new]);
+          if (formatted?.length) {
+            upsertPositionInCache(formatted[0]);
+          }
+        });
+
+        // Handle WebSocket errors - activate fallback
+        const unsubError = wsClient.onError((error) => {
+          console.warn('⚠️ WebSocket error, activating fallback:', error);
+          wsConnected = false;
+          if (!fallbackActive) {
+            activateFallback();
+          }
+        });
+
+        return () => {
+          unsubEvent();
+          unsubError();
+        };
+      } catch (error) {
+        console.error('❌ WebSocket setup failed, using fallback:', error);
+        wsConnected = false;
+        if (!fallbackActive) {
+          activateFallback();
+        }
+      }
+    };
+
+    // Layer 3: Supabase Fallback (when WebSocket fails)
+    const activateFallback = () => {
+      if (fallbackActive || !supabase) return;
+      fallbackActive = true;
+
+      console.log('🔄 Activating Supabase fallback for user:', address);
+
+      // Use Supabase Realtime as backup
+      fallbackChannel = supabase
+        .channel(`fallback_bets_${address.toLowerCase()}`)
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'bet_placed_with_session',
+          filter: `user_address=eq.${address.toLowerCase()}`,
+        }, async (payload: any) => {
+          console.log('📨 Fallback bet update:', payload);
           if (payload.eventType === 'DELETE') {
             removePositionFromCache(payload.old?.event_id);
             return;
           }
           await hydrateRealtimeBet(payload.new as BetPlacedWithSession);
-        } catch (error) {
-          console.error('Error applying realtime bet update:', error);
-          refetch();
-        }
-      })
-      .subscribe();
+        })
+        .subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            console.log('✅ Fallback active (Supabase direct)');
+          }
+        });
+    };
 
+    // Fallback timer: If WebSocket doesn't connect in 5s, use Supabase
+    fallbackTimerRef.current = setTimeout(() => {
+      if (!wsConnected) {
+        console.log('⏱️ WebSocket timeout, activating fallback');
+        activateFallback();
+      }
+    }, 5000);
+
+    // Setup settlements subscription - INSTANT optimistic update
     const settledChannel = supabase
-      .channel('timeperiod_settled_changes')
+      ?.channel('timeperiod_settled_changes')
       .on('postgres_changes' as any, {
         event: '*',
         schema: 'public',
         table: 'timeperiod_settled',
-      }, () => refetch())
-      .subscribe();
+      }, (payload) => {
+        const settlement = payload.new || payload.record;
+        if (!settlement) return;
+        
+        const timeperiodId = settlement.timeperiod_id;
+        const twapPrice = settlement.twap_price;
+        
+        console.log('⚡ INSTANT settlement update:', timeperiodId);
+        
+        // INSTANT optimistic cache update - show settlement price immediately
+        queryClient.setQueryData(
+          queryKey,
+          (oldData: any) => {
+            if (!oldData?.pages) return oldData;
+            
+            const newPages = oldData.pages.map((page: any) => ({
+              ...page,
+              data: page.data.map((position: any) => {
+                if (position.timeperiodId !== timeperiodId) return position;
+                
+                const settlementPrice = twapPrice ? `$${(parseFloat(twapPrice) / 1e8).toFixed(2)}` : null;
+                
+                console.log(`⚡ INSTANT: ${position.id.slice(0, 8)}... → Resolved`);
+                
+                return {
+                  ...position,
+                  settlement: {
+                    ...position.settlement,
+                    price: settlementPrice,
+                  },
+                  status: 'Resolved',
+                };
+              }),
+            }));
+            
+            return { ...oldData, pages: newPages };
+          }
+        );
+        
+        // Background refetch for accurate win/loss/payout (non-blocking)
+        setTimeout(() => {
+          console.log('🔄 Background refetch for accurate data...');
+          refetch();
+        }, 50);
+      })
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Subscribed to settlement updates');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('❌ Settlement channel error');
+        }
+      });
 
-    const winningsChannel = supabase
-      .channel('winnings_claimed_changes')
-      .on('postgres_changes' as any, {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'winnings_claimed_equal',
-      }, () => refetch())
-      .subscribe();
+    // Winnings are handled by settlement subscription above - no separate subscription needed
 
-    // Listen for orderPlaced events
-    const handleOrderPlaced = () => {
-      console.log('📢 orderPlaced event received - refetching bets');
-      refetch();
-    };
-    
     if (typeof window !== 'undefined') {
       window.addEventListener('orderPlaced', handleOrderPlaced);
     }
+
+    const wsCleanup = setupWebSocket();
 
     return () => {
       if (typeof window !== 'undefined') {
         window.removeEventListener('orderPlaced', handleOrderPlaced);
       }
-      supabase.removeChannel(betsChannel);
-      supabase.removeChannel(settledChannel);
-      supabase.removeChannel(winningsChannel);
+      if (fallbackTimerRef.current) {
+        clearTimeout(fallbackTimerRef.current);
+      }
+      if (fallbackChannel) {
+        supabase?.removeChannel(fallbackChannel);
+      }
+      if (settledChannel) {
+        supabase?.removeChannel(settledChannel);
+      }
+      wsCleanup?.then(cleanup => cleanup?.());
     };
-  }, [refetch, hydrateRealtimeBet, removePositionFromCache]);
+  }, [address, addOptimisticBet, upsertPositionInCache, wsClient, queryKey, queryClient, refetch, hydrateRealtimeBet, removePositionFromCache]);
 
   return {
     positions,

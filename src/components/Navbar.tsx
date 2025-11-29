@@ -2,7 +2,7 @@
 
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useBalance, useDisconnect } from 'wagmi';
-import { useState, useEffect } from 'react';
+import { useState, useEffect,useRef } from 'react';
 import { useSessionTrading } from '../contexts/SessionTradingContext';
 import { useWrapperBalance } from '../hooks/useWrapperBalance';
 
@@ -21,6 +21,50 @@ export default function Navbar({ onDepositClick, onEnableTrading }: NavbarProps)
   const [showAccountMenu, setShowAccountMenu] = useState(false);
   const [hasActiveSession, setHasActiveSession] = useState(false);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
+  const [activeNavItem, setActiveNavItem] = useState('Trade');
+  const [showMobileMenu, setShowMobileMenu] = useState(false);
+  const accountMenuRef = useRef<HTMLDivElement>(null);
+  const mobileMenuRef = useRef<HTMLDivElement>(null);
+
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      
+      if (accountMenuRef.current && !accountMenuRef.current.contains(target)) {
+        setShowAccountMenu(false);
+      }
+      
+      // Don't close mobile menu if clicking the hamburger button
+      const hamburgerButton = document.querySelector('[aria-label="Menu"]');
+      if (mobileMenuRef.current && 
+          !mobileMenuRef.current.contains(target) && 
+          hamburgerButton && 
+          !hamburgerButton.contains(target)) {
+        setShowMobileMenu(false);
+      }
+    };
+
+    if (showAccountMenu || showMobileMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showAccountMenu, showMobileMenu]);
+
+  // Prevent body scroll when mobile menu is open
+  useEffect(() => {
+    if (showMobileMenu) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [showMobileMenu]);
 
   useEffect(() => {
     if (sdk && isConnected) {
@@ -114,22 +158,24 @@ export default function Navbar({ onDepositClick, onEnableTrading }: NavbarProps)
   return (
     <>
       <style>{`
-        [data-testid="rk-connect-button"] {
-          background: white !important;
+       [data-testid="rk-connect-button"] {
+          background: #00FF24 !important;
           color: #000 !important;
           border: none !important;
           font-family: 'Geist', sans-serif !important;
-          border-radius: 0px !important;
+          border-radius: 24px !important;
           padding: 6px 16px !important;
-          font-weight: 300 !important;
-          font-size: 14px !important;
+          font-weight: 500 !important;
+          font-size: 16px !important;
           cursor: pointer !important;
           transition: all 0.3s ease !important;
+          position: relative !important;
+          box-shadow: 0 4px 14.6px 0 rgba(0, 255, 36, 0.3) !important;
         }
         [data-testid="rk-connect-button"]:hover {
           background-color: black !important;
+           border: 0.5px solid white !important;
           color: white !important;
-          border: 1px solid white !important;
         }
         [data-testid="rk-connect-button"]:active {
           transform: translateY(0) !important;
@@ -140,119 +186,260 @@ export default function Navbar({ onDepositClick, onEnableTrading }: NavbarProps)
         }
       `}</style>
 
-      <nav className="flex items-center justify-between px-4 py-1.5 h-[60px] border-b border-[rgba(214,213,212,0.1)] bg-[#0a0a0a]">
-        <div className="flex items-center gap-4">
-          <img className="w-[156px] h-[29px]" src="./image copy.png" alt="Mercury Logo" />
-          <div className="bg-white/5 border-b-2 border-[#00ff24] px-[18px] py-[13px] text-sm font-medium cursor-pointer transition-colors duration-300 hover:bg-white/10">
-            Trade
+      <nav className="flex items-center justify-between px-1 md:px-2 py-1.5 h-[60px] border-b border-[rgba(214,213,212,0.1)] bg-[#011b04]">
+        {/* Logo */}
+        <div className="flex items-center gap-0 md:gap-2 lg:gap-4 xl:gap-6">
+          <img className="w-[140px] md:w-[160px] lg:w-[179px] h-[28px] md:h-[32px] lg:h-[36px] flex-shrink-0  md:ml-1" src="./image copy.png" alt="Mercury Logo" />
+          
+          {/* Desktop Navigation - Hidden on mobile, visible on md+ */}
+          <div className="hidden md:flex items-center gap-0">
+            <div 
+              className={`px-[10px] lg:px-[12px] xl:px-[15px] py-[15px] text-[18px] font-[500] cursor-pointer transition-colors duration-300 hover:bg-white/10 whitespace-nowrap ${
+                activeNavItem === 'Trade' ? 'border-b-2 border-[#00ff24] text-white' : 'border-b-2 border-transparent text-gray-500'
+              }`}
+              onClick={() => setActiveNavItem('Trade')}
+            >
+              Trade
+            </div>
+            <div 
+              className={`px-[10px] lg:px-[12px] xl:px-[15px] py-[15px] text-[18px] font-[500] cursor-pointer transition-colors duration-300 hover:bg-white/10 whitespace-nowrap ${
+                activeNavItem === 'Leaderboard' ? 'border-b-2 border-[#00ff24] text-white' : 'border-b-2 border-transparent text-gray-500'
+              }`}
+              onClick={() => setActiveNavItem('Leaderboard')}
+            >
+              Leaderboard
+            </div>
+            <div 
+              className={`px-[10px] lg:px-[12px] xl:px-[15px] py-[15px] text-[18px] font-[500] cursor-pointer transition-colors duration-300 hover:bg-white/10 whitespace-nowrap ${
+                activeNavItem === 'Refferal' ? 'border-b-2 border-[#00ff24] text-white' : 'border-b-2 border-transparent text-gray-500'
+              }`}
+              onClick={() => setActiveNavItem('Refferal')}
+            >
+              Refferal
+            </div>
+            <div 
+              className={`px-[10px] lg:px-[12px] xl:px-[15px] py-[15px] text-[18px] font-[500] cursor-pointer transition-colors duration-300 hover:bg-white/10 whitespace-nowrap ${
+                activeNavItem === 'Portfolio' ? 'border-b-2 border-[#00ff24] text-white' : 'border-b-2 border-transparent text-gray-500'
+              }`}
+              onClick={() => setActiveNavItem('Portfolio')}
+            >
+              Portfolio
+            </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="flex gap-0">
-            {[0, 1, 2].map((idx) => (
-              <div
-                key={idx}
-                className="p-2 cursor-pointer opacity-70 transition-opacity duration-300 hover:opacity-100 text-base"
-              >
-                {idx === 0 && (
-                  <svg width="20" height="21" viewBox="0 0 24 25" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path
-                      d="M6 22.5H21V20.5H6.012C5.55 20.488 5 20.305 5 19.5C5 18.695 5.55 18.512 6.012 18.5H21V4.5C21 3.397 20.103 2.5 19 2.5H6C4.794 2.5 3 3.299 3 5.5V19.5C3 21.701 4.794 22.5 6 22.5ZM5 8.5V5.5C5 4.695 5.55 4.512 6 4.5H19V16.5H5V8.5Z"
-                      fill="#6F7681"
-                    />
-                    <path d="M8 6.5H17V8.5H8V6.5Z" fill="#6F7681" />
-                  </svg>
-                )}
-                {idx === 1 && (
-                  <svg width="20" height="21" viewBox="0 0 24 25" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path
-                      fillRule="evenodd"
-                      clipRule="evenodd"
-                      d="M19.7767 4.92997C20.0238 4.82596 20.2943 4.79008 20.5599 4.82608C20.8256 4.86208 21.0768 4.96863 21.2873 5.13465C21.4979 5.30067 21.6601 5.52008 21.757 5.77005C21.854 6.02002 21.8822 6.29141 21.8387 6.55597L19.5707 20.313C19.3507 21.64 17.8947 22.401 16.6777 21.74C15.6597 21.187 14.1477 20.335 12.7877 19.446C12.1077 19.001 10.0247 17.576 10.2807 16.562C10.5007 15.695 14.0007 12.437 16.0007 10.5C16.7857 9.73897 16.4277 9.29997 15.5007 9.99997C13.1987 11.738 9.50265 14.381 8.28065 15.125C7.20265 15.781 6.64065 15.893 5.96865 15.781C4.74265 15.577 3.60565 15.261 2.67765 14.876C1.42365 14.356 1.48465 12.632 2.67665 12.13L19.7767 4.92997Z"
-                      fill="#6F7681"
-                    />
-                  </svg>
-                )}
-                {idx === 2 && (
-                  <svg width="19" height="19" viewBox="0 0 23 23" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <mask id="mask0_40_16050" maskUnits="userSpaceOnUse" x="0" y="0" width="23" height="23">
-                      <path d="M0 0H23V23H0V0Z" fill="white" />
-                    </mask>
-                    <g mask="url(#mask0_40_16050)">
-                      <path
-                        d="M18.1125 1.07764H21.6397L13.9347 9.90635L23 21.9222H15.9029L10.3401 14.6361L3.98229 21.9222H0.451786L8.69236 12.4758L0 1.07928H7.27786L12.2984 7.73778L18.1125 1.07764ZM16.8721 19.8062H18.8271L6.21 3.08357H4.11371L16.8721 19.8062Z"
-                        fill="#6F7681"
-                      />
-                    </g>
-                  </svg>
-                )}
-              </div>
-            ))}
-          </div>
+        <div className="flex items-center gap-2 md:gap-3 lg:gap-4 xl:gap-5 flex-shrink-0">
+
+          {/* Hamburger Menu Button - Visible only on mobile */}
+          <button
+            className="md:hidden flex items-center justify-center w-10 h-10 text-white"
+            onClick={() => setShowMobileMenu(!showMobileMenu)}
+            aria-label="Menu"
+          >
+            {showMobileMenu ? (
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M18 6L6 18M6 6L18 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            ) : (
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M3 12H21M3 6H21M3 18H21" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            )}
+          </button>
 
           {isConnected && address ? (
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 md:gap-2.5 lg:gap-3 xl:gap-4">
               {!hasActiveSession && (
-                <button
-                  className="px-4 py-1.5 bg-white/10 text-white border border-[#7e7e7e] font-[Geist Mono] text-sm font-light whitespace-nowrap transition-colors duration-300 hover:bg-white hover:text-black hover:border-white disabled:opacity-60 disabled:cursor-not-allowed"
-                  onClick={handleEnableTrading}
-                  disabled={isCreatingSession}
-                >
-                  {isCreatingSession ? '⏳ Enabling...' : '🔑 Enable Trading'}
-                </button>
+               <button
+               className="hidden md:flex px-4 lg:px-5 xl:px-6 py-1.5 bg-[#00FF24] h-[44px] rounded-full text-black border-[0.5px] border-transparent font-[Geist Mono] text-[16px] font-500 whitespace-nowrap transition-all duration-300 hover:bg-black hover:text-white hover:border-white disabled:opacity-60 disabled:cursor-not-allowed"
+               onClick={handleEnableTrading}
+               disabled={isCreatingSession}
+               style={{
+                 boxShadow: '0 4px 14.6px 0 rgba(0, 255, 36, 0.3)'
+               }}
+             >
+               {isCreatingSession ? '⏳ Enabling...' : 'Enable Trading'}
+             </button>
               )}
 
-              <div className="flex items-center bg-white/10 border border-[rgba(238,237,236,0.4)] h-[28px]">
-                <span className="px-2 font-[Geist Mono] text-[13px] text-white leading-[28px]">
+                <div 
+                  onClick={onDepositClick}
+                  className="hidden md:flex items-center bg-transparent border border-[rgba(238,237,236,0.4)] rounded-full h-[40px] px-3 lg:px-3.5 xl:px-4 gap-2.5 cursor-pointer transition-all duration-200 hover:opacity-90"
+                >
+                <span className="font-[Geist Mono] text-[15px] font-500 text-white whitespace-nowrap">
                   {isLoadingWrapper ? '...' : formatBalance(wrapperBalanceUSD)}
                 </span>
-                <button
-                  className="h-full w-[28px] flex items-center justify-center border-l border-[#7e7e7e] text-white text-lg transition-colors duration-200 hover:bg-[rgba(0,255,36,0.1)] hover:text-[#00ff24]"
-                  onClick={onDepositClick}
+                <div
+                  className="w-[26px] h-[26px] rounded-full bg-[#00ff24] flex items-center justify-center text-black text-base font-medium flex-shrink-0"
+                  style={{
+                    boxShadow: '0 0 10px rgba(0, 255, 36, 0.5)'
+                  }}
                 >
                   +
-                </button>
+                </div>
               </div>
 
-              <div className="relative flex items-center bg-white/10 border border-[rgba(238,237,236,0.4)] h-[28px]">
-                <span className="px-2 font-[Geist Mono] text-[12px] text-white leading-[28px]">
+              <div 
+                ref={accountMenuRef}
+                onClick={() => setShowAccountMenu((prev) => !prev)}
+                className="hidden md:flex relative items-center bg-transparent border border-white/30 rounded-full h-[40px] px-3 lg:px-4 xl:px-5 py-2 gap-2 lg:gap-[10px] cursor-pointer transition-all duration-200 hover:opacity-90 z-50"
+                style={{
+                  boxShadow: '0 4px 14.6px rgba(0, 0, 0, 0.1)'
+                }}
+              >
+                <div className="w-6 h-6 rounded-full bg-red-500 flex items-center justify-center flex-shrink-0">
+                </div>
+                <span className="font-[Geist Mono] text-[11px] md:text-[12px] text-white whitespace-nowrap">
                   {formatAddress(address)}
                 </span>
-                <button
-                  className="h-full w-[28px] flex items-center justify-center border-l border-[#7e7e7e] text-white transition-colors duration-200 hover:bg-white/10"
-                  onClick={() => setShowAccountMenu((prev) => !prev)}
+                <div
+                  className="flex items-center justify-center text-white flex-shrink-0"
                 >
-                  <svg width="19" height="19" viewBox="0 0 19 19" fill="none">
-                    <path
-                      d="M4.75 7.125L9.5 11.875L14.25 7.125"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </button>
+                 <svg width="11" height="6" viewBox="0 0 11 6" fill="none" xmlns="http://www.w3.org/2000/svg">
+<path d="M5.5 6L0 0H11L5.5 6Z" fill="#CCD1CD"/>
+</svg>
+                </div>
 
                 {showAccountMenu && (
-                  <div className="absolute top-[calc(100%+8px)] left-0 right-0 bg-[#1d1d1f] border border-[#605d5d] shadow-[0_4px_12px_rgba(0,0,0,0.5)] z-[1000]">
+                  <div className="absolute top-[calc(100%+8px)] right-0 min-w-full bg-[#354639] border border-white/30 shadow-[0_4px_12px_rgba(0,0,0,0.5)] z-[10000] rounded-full">
+                  <button
+                    className="w-full h-[44px] px-3 md:px-4 flex items-center justify-center text-xs md:text-sm text-white transition-colors duration-200 hover:bg-[#354639] hover:text-[#ff4444] rounded-full"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      disconnect();
+                      setShowAccountMenu(false);
+                    }}
+                  >
+                    Disconnect
+                  </button>
+                </div>
+                )}
+              </div>
+              
+              <button
+                className="hidden lg:flex items-center justify-center text-white/40 transition-colors duration-200 hover:text-white hover:opacity-100"
+                aria-label="Settings"
+              >
+                <svg width="21" height="20" viewBox="0 0 21 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M7.3 20L6.9 16.8C6.68333 16.7167 6.47933 16.6167 6.288 16.5C6.09667 16.3833 5.909 16.2583 5.725 16.125L2.75 17.375L0 12.625L2.575 10.675C2.55833 10.5583 2.55 10.446 2.55 10.338V9.663C2.55 9.55433 2.55833 9.44167 2.575 9.325L0 7.375L2.75 2.625L5.725 3.875C5.90833 3.74167 6.1 3.61667 6.3 3.5C6.5 3.38333 6.7 3.28333 6.9 3.2L7.3 0H12.8L13.2 3.2C13.4167 3.28333 13.621 3.38333 13.813 3.5C14.005 3.61667 14.1923 3.74167 14.375 3.875L17.35 2.625L20.1 7.375L17.525 9.325C17.5417 9.44167 17.55 9.55433 17.55 9.663V10.337C17.55 10.4457 17.5333 10.5583 17.5 10.675L20.075 12.625L17.325 17.375L14.375 16.125C14.1917 16.2583 14 16.3833 13.8 16.5C13.6 16.6167 13.4 16.7167 13.2 16.8L12.8 20H7.3ZM10.1 13.5C11.0667 13.5 11.8917 13.1583 12.575 12.475C13.2583 11.7917 13.6 10.9667 13.6 10C13.6 9.03333 13.2583 8.20833 12.575 7.525C11.8917 6.84167 11.0667 6.5 10.1 6.5C9.11667 6.5 8.28733 6.84167 7.612 7.525C6.93667 8.20833 6.59933 9.03333 6.6 10C6.60067 10.9667 6.93833 11.7917 7.613 12.475C8.28767 13.1583 9.11667 13.5 10.1 13.5Z" fill="white" fillOpacity="0.4"/>
+                </svg>
+              </button>
+            </div>
+          ) : (
+            <ConnectButton label="Connect" />
+          )}
+        </div>
+
+        {/* Mobile Menu Dropdown */}
+        {showMobileMenu && (
+          <div 
+            ref={mobileMenuRef}
+            className="md:hidden fixed top-[60px] left-0 right-0 bg-[#011b04] border-b border-[rgba(214,213,212,0.1)] shadow-lg z-50 max-h-[calc(100vh-60px)] overflow-y-auto overflow-x-hidden"
+          >
+            <div className="flex flex-col p-4 gap-2 pb-6 w-full overflow-x-hidden">
+              {/* Mobile Navigation */}
+              <div 
+                className={`px-4 py-3 text-[16px] font-[500] cursor-pointer transition-colors duration-300 hover:bg-white/10 rounded-lg ${
+                  activeNavItem === 'Trade' ? 'bg-[#00ff24]/10 text-[#00ff24]' : 'text-gray-400'
+                }`}
+                onClick={() => {
+                  setActiveNavItem('Trade');
+                  setShowMobileMenu(false);
+                }}
+              >
+                Trade
+              </div>
+              <div 
+                className={`px-4 py-3 text-[16px] font-[500] cursor-pointer transition-colors duration-300 hover:bg-white/10 rounded-lg ${
+                  activeNavItem === 'Leaderboard' ? 'bg-[#00ff24]/10 text-[#00ff24]' : 'text-gray-400'
+                }`}
+                onClick={() => {
+                  setActiveNavItem('Leaderboard');
+                  setShowMobileMenu(false);
+                }}
+              >
+                Leaderboard
+              </div>
+              <div 
+                className={`px-4 py-3 text-[16px] font-[500] cursor-pointer transition-colors duration-300 hover:bg-white/10 rounded-lg ${
+                  activeNavItem === 'Refferal' ? 'bg-[#00ff24]/10 text-[#00ff24]' : 'text-gray-400'
+                }`}
+                onClick={() => {
+                  setActiveNavItem('Refferal');
+                  setShowMobileMenu(false);
+                }}
+              >
+                Refferal
+              </div>
+              <div 
+                className={`px-4 py-3 text-[16px] font-[500] cursor-pointer transition-colors duration-300 hover:bg-white/10 rounded-lg ${
+                  activeNavItem === 'Portfolio' ? 'bg-[#00ff24]/10 text-[#00ff24]' : 'text-gray-400'
+                }`}
+                onClick={() => {
+                  setActiveNavItem('Portfolio');
+                  setShowMobileMenu(false);
+                }}
+              >
+                Portfolio
+              </div>
+
+              {/* Mobile Account Section */}
+              {isConnected && address && (
+                <>
+                  <div className="border-t border-white/10 my-2"></div>
+                  
+                  {/* Balance & Deposit */}
+                  <div 
+                    onClick={() => {
+                      onDepositClick?.();
+                      setShowMobileMenu(false);
+                    }}
+                    className="flex items-center justify-between bg-white/5 rounded-lg p-3 cursor-pointer transition-all duration-200 hover:opacity-90"
+                  >
+                    <span className="font-[Geist Mono] text-[14px] text-white">
+                      {isLoadingWrapper ? '...' : formatBalance(wrapperBalanceUSD)}
+                    </span>
+                    <div
+                      className="w-[32px] h-[32px] rounded-full bg-[#00ff24] flex items-center justify-center text-black text-lg font-medium"
+                    >
+                      +
+                    </div>
+                  </div>
+
+                  {/* Enable Trading */}
+                  {!hasActiveSession && (
                     <button
-                      className="w-full h-[28px] px-4 flex items-center justify-center text-sm text-[#e0e0e0] transition-colors duration-200 hover:bg-white/10 hover:text-[#ff4444]"
+                      className="w-full px-4 py-3 bg-[#00FF24] rounded-lg text-black font-[Geist Mono] text-[14px] font-500 transition-all duration-300 hover:bg-black hover:text-white"
+                      onClick={() => {
+                        handleEnableTrading();
+                        setShowMobileMenu(false);
+                      }}
+                      disabled={isCreatingSession}
+                    >
+                      {isCreatingSession ? '⏳ Enabling...' : 'Enable Trading'}
+                    </button>
+                  )}
+
+                  {/* Address & Disconnect */}
+                  <div className="flex items-center justify-between bg-white/5 rounded-lg p-3 w-full min-w-0">
+                    <span className="font-[Geist Mono] text-[12px] text-white truncate flex-1 min-w-0">
+                      {formatAddress(address)}
+                    </span>
+                    <button
+                      className="text-[12px] text-red-400 hover:text-red-300 flex-shrink-0 ml-2"
                       onClick={() => {
                         disconnect();
-                        setShowAccountMenu(false);
+                        setShowMobileMenu(false);
                       }}
                     >
                       Disconnect
                     </button>
                   </div>
-                )}
-              </div>
+                </>
+              )}
             </div>
-          ) : (
-            <ConnectButton />
-          )}
-        </div>
+          </div>
+        )}
       </nav>
     </>
   );
