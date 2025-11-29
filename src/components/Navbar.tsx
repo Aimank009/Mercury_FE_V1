@@ -251,7 +251,7 @@ export default function Navbar({ onDepositClick, onEnableTrading }: NavbarProps)
             <div className="flex items-center gap-2 md:gap-2.5 lg:gap-3 xl:gap-4">
               {!hasActiveSession && (
                <button
-               className="hidden md:flex px-4 lg:px-5 xl:px-6 py-1.5 bg-[#00FF24] h-[44px] rounded-full text-black border-[0.5px] border-transparent font-[Geist Mono] text-[16px] font-500 whitespace-nowrap transition-all duration-300 hover:bg-black hover:text-white hover:border-white disabled:opacity-60 disabled:cursor-not-allowed"
+               className="hidden md:flex items-center justify-center px-4 lg:px-5 xl:px-6 bg-[#00FF24] h-[40px] rounded-full text-black border-[0.5px] border-transparent font-[Geist Mono] text-[16px] font-500 whitespace-nowrap transition-all duration-300 hover:bg-black hover:text-white hover:border-white disabled:opacity-60 disabled:cursor-not-allowed"
                onClick={handleEnableTrading}
                disabled={isCreatingSession}
                style={{

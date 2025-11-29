@@ -1,8 +1,12 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useAccount } from 'wagmi';
+import { useAccount, useWalletClient } from 'wagmi';
 import { useDepositWithdraw } from '../contexts/DepositWithdrawContext';
+import { LiFiSDK, SUPPORTED_CHAINS, ChainOption } from '../lib/LiFiSDK';
+import { getChainBalance } from '../lib/chainBalances';
+import { LiFiWidget, WidgetConfig } from '@lifi/widget';
+import type { Route } from '@lifi/types';
 
 interface DepositWithdrawModalProps {
   isOpen: boolean;
@@ -14,9 +18,16 @@ export default function DepositWithdrawModal({ isOpen, onClose }: DepositWithdra
   const [amount, setAmount] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
-  const [debugInfo, setDebugInfo] = useState<any>(null);
-  const [networkInfo, setNetworkInfo] = useState<{ chainId: number; name: string } | null>(null);
+  const [currentStep, setCurrentStep] = useState<'idle' | 'approving' | 'depositing' | 'bridging'>('idle');
+  const [selectedChain, setSelectedChain] = useState<ChainOption>(SUPPORTED_CHAINS[3]); // Default to HYPE
+  const [showChainDropdown, setShowChainDropdown] = useState(false);
+  const [bridgeQuote, setBridgeQuote] = useState<Route | null>(null);
+  const [lifiSDK] = useState(() => new LiFiSDK());
+  const [selectedChainBalance, setSelectedChainBalance] = useState<string>('');
+  const [isFetchingBalance, setIsFetchingBalance] = useState(false);
+  const [showLiFiWidget, setShowLiFiWidget] = useState(false);
   const { address } = useAccount();
+  const { data: walletClient } = useWalletClient();
   const {
     sdk,
     isConnected,
@@ -41,9 +52,10 @@ export default function DepositWithdrawModal({ isOpen, onClose }: DepositWithdra
         connect();
       } else {
         refreshBalance();
+        checkApproval();
       }
     }
-  }, [isOpen, address, isConnected, connect, refreshBalance]);
+  }, [isOpen, address, isConnected, connect, refreshBalance, checkApproval]);
 
   useEffect(() => {
     if (successMessage) {
@@ -52,26 +64,61 @@ export default function DepositWithdrawModal({ isOpen, onClose }: DepositWithdra
     }
   }, [successMessage]);
 
+  // Fetch balance for selected chain
+  useEffect(() => {
+    const fetchChainBalance = async () => {
+      if (!address) {
+        setSelectedChainBalance('');
+        return;
+      }
+
+      if (selectedChain.id === 999) {
+        // For HyperEVM, use the existing wallet balance
+        setSelectedChainBalance(walletBalance?.balanceFormatted || '');
+        return;
+      }
+
+      setIsFetchingBalance(true);
+      try {
+        const balance = await getChainBalance(selectedChain.id, address as `0x${string}`);
+        setSelectedChainBalance(balance);
+      } catch (error) {
+        console.error('Failed to fetch chain balance:', error);
+        setSelectedChainBalance('0.00');
+      } finally {
+        setIsFetchingBalance(false);
+      }
+    };
+
+    if (activeTab === 'deposit') {
+      fetchChainBalance();
+    } else {
+      setSelectedChainBalance('');
+    }
+  }, [selectedChain, address, activeTab, walletBalance]);
+
+  // Fetch bridge quote when amount and chain changes
+  useEffect(() => {
+    // Disable automatic quote fetching for now
+    // LiFi integration requires proper configuration
+    setBridgeQuote(null);
+  }, [amount, selectedChain, activeTab, address]);
+
   if (!isOpen) return null;
 
-  const handleApprove = async () => {
-    if (!isConnected) {
-      await connect();
+  const handleBridgeDeposit = async () => {
+    if (!walletClient || !address) {
+      alert('Please connect your wallet first');
       return;
     }
 
-    setIsProcessing(true);
-    clearError();
-
-    try {
-      const result = await approve();
-      setSuccessMessage(`Successfully approved USDTO! Transaction: ${result.txHash.slice(0, 10)}...`);
-      await checkApproval();
-    } catch (err: any) {
-      console.error('Approval error:', err);
-    } finally {
-      setIsProcessing(false);
+    if (!amount || parseFloat(amount) <= 0) {
+      alert('Please enter a valid amount');
+      return;
     }
+    
+    // Open Li.Fi Widget for cross-chain bridge
+    setShowLiFiWidget(true);
   };
 
   const handleDeposit = async () => {
@@ -80,16 +127,40 @@ export default function DepositWithdrawModal({ isOpen, onClose }: DepositWithdra
       return;
     }
 
+    if (!amount || parseFloat(amount) <= 0) {
+      alert('Please enter a valid amount');
+      return;
+    }
+
+    // If not on HyperEVM, use bridge
+    if (selectedChain.id !== 999) {
+      await handleBridgeDeposit();
+      return;
+    }
+
     setIsProcessing(true);
     clearError();
 
     try {
+      // Auto-approve if not already approved
+      if (!isApproved) {
+        setCurrentStep('approving');
+        await approve();
+        // Wait a moment for approval to be mined
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        await checkApproval();
+      }
+
+      // Proceed with deposit
+      setCurrentStep('depositing');
       const result = await deposit(amount);
-      setSuccessMessage(`Successfully deposited ${amount} USDTO! Transaction: ${result.txHash.slice(0, 10)}...`);
+      setSuccessMessage(`✅ Successfully deposited ${amount} USDTO!`);
       setAmount('');
+      setCurrentStep('idle');
       setTimeout(() => onClose(), 2000);
     } catch (err: any) {
       console.error('Deposit error:', err);
+      setCurrentStep('idle');
     } finally {
       setIsProcessing(false);
     }
@@ -101,12 +172,17 @@ export default function DepositWithdrawModal({ isOpen, onClose }: DepositWithdra
       return;
     }
 
+    if (!amount || parseFloat(amount) <= 0) {
+      alert('Please enter a valid amount');
+      return;
+    }
+
     setIsProcessing(true);
     clearError();
 
     try {
       const result = await withdraw(amount);
-      setSuccessMessage(`Successfully withdrew ${amount} USDTO! Transaction: ${result.txHash.slice(0, 10)}...`);
+      setSuccessMessage(`✅ Successfully withdrew ${amount} USDTO!`);
       setAmount('');
       setTimeout(() => onClose(), 2000);
     } catch (err: any) {
@@ -117,11 +193,25 @@ export default function DepositWithdrawModal({ isOpen, onClose }: DepositWithdra
   };
 
   const handleSubmit = () => {
-    if (!amount || parseFloat(amount) <= 0) {
-      alert('Please enter a valid amount');
-      return;
-    }
     activeTab === 'deposit' ? handleDeposit() : handleWithdraw();
+  };
+
+  const setMaxAmount = () => {
+    let maxBalance = '0';
+    if (activeTab === 'deposit') {
+      // Use selected chain balance if not on HyperEVM
+      if (selectedChain.id !== 999) {
+        maxBalance = selectedChainBalance && selectedChainBalance !== '' ? selectedChainBalance : '0';
+      } else {
+        maxBalance = walletBalance?.balanceFormatted || '0';
+      }
+    } else {
+      maxBalance = balance?.balanceFormatted || '0';
+    }
+    // Only set if we have a valid balance
+    if (maxBalance && maxBalance !== '0' && maxBalance !== '') {
+      setAmount(maxBalance);
+    }
   };
 
   const getBalanceToShow = () =>
@@ -129,200 +219,307 @@ export default function DepositWithdrawModal({ isOpen, onClose }: DepositWithdra
 
   const handleTabChange = (tab: 'deposit' | 'withdraw') => {
     setActiveTab(tab);
+    setAmount('');
+    setCurrentStep('idle');
+    clearError();
     if (isConnected) {
       refreshBalance();
+      if (tab === 'deposit') {
+        checkApproval();
+      }
     }
   };
 
-  const handleDebugTest = async () => {
-    if (!sdk || !isConnected) return;
-    setIsProcessing(true);
-    try {
-      const debug = await sdk.testContractInteraction();
-      setDebugInfo(debug);
-      console.log('Debug info:', debug);
-    } catch (err: any) {
-      console.error('Debug test failed:', err);
-    } finally {
-      setIsProcessing(false);
+  const getButtonText = () => {
+    if (isProcessing) {
+      if (currentStep === 'approving') return 'Approving...';
+      if (currentStep === 'bridging') return 'Bridging...';
+      if (currentStep === 'depositing') return 'Depositing...';
+      return 'Processing...';
     }
+    if (activeTab === 'deposit' && selectedChain.id !== 999) {
+      return 'Bridge & Deposit';
+    }
+    return activeTab === 'deposit' ? 'Deposit' : 'Withdraw';
   };
 
   return (
     <div
-      className="fixed top-0 left-0 right-0 bottom-0 bg-black/85 backdrop-blur-md flex items-center justify-center z-[10002] animate-fade-in"
+      className="fixed inset-0 bg-black/30 backdrop-blur-[12px] flex items-center justify-center z-[10002] animate-fade-in"
       onClick={onClose}
     >
-      <div
-        className="bg-[#1d1d1f] border border-[#605d5d] w-[452px] max-w-[90%] flex flex-col animate-slide-up"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="relative overflow-visible">
+        {/* Close Button */}
+        <button
+          onClick={onClose}
+          className="absolute -top-4 -right-4 w-8 h-8 rounded-full bg-[#000E02] hover:bg-[#2a2a2a] border border-[#162A19] flex items-center justify-center transition-all duration-200 group z-[10003]"
+        >
+          <svg className="w-5 h-5 text-gray-400 group-hover:text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+        <div
+          className="bg-[#000E02] border-2 border-[#162A19] rounded-2xl w-[322px] h-[409px] shadow-2xl shadow-green-900/20 relative flex flex-col overflow-hidden"
+          onClick={(e) => e.stopPropagation()}
+        >
+
         {/* Tab Headers */}
-        <div className="flex w-full">
+        <div className="flex justify-center p-4 gap-2 flex-shrink-0">
           <button
-            className={`flex-1 py-2 px-4 text-base font-medium tracking-[-0.8px] cursor-pointer transition-all duration-200 border-b border-[#605d5d] ${
-              activeTab === 'deposit'
-                ? 'bg-white text-[#1b273a] border-b-0'
-                : 'bg-white/10 text-white/60 hover:bg-white/15'
-            } border-r-[0.5px] border-r-[#605d5d]`}
             onClick={() => handleTabChange('deposit')}
+            disabled={isProcessing}
+            className={`rounded-[24px] w-[147px] h-[36px] transition-all duration-200  ${
+              activeTab === 'deposit'
+                ? 'bg-[#00570C] border border-[#00ff41]/50'
+                : ''
+            }`}
           >
             Deposit
           </button>
-          <button
-            className={`flex-1 py-2 px-4 text-base font-medium tracking-[-0.8px] cursor-pointer transition-all duration-200 border-b border-[#605d5d] ${
-              activeTab === 'withdraw'
-                ? 'bg-white text-[#1b273a] border-b-0'
-                : 'bg-white/10 text-white/60 hover:bg-white/15'
-            } border-l-[0.5px] border-l-[#605d5d]`}
+         <button
             onClick={() => handleTabChange('withdraw')}
+            disabled={isProcessing}
+            className={`rounded-[24px] w-[147px] h-[36px] transition-all duration-200  ${
+              activeTab === 'withdraw'
+                ? 'bg-[#00570C] border border-[#00ff41]/50'
+                : ''
+            }`}
           >
             Withdraw
           </button>
         </div>
 
         {/* Tab Content */}
-        <div className="pt-[68px] flex flex-col gap-6 min-h-[363px]">
+        <div className="p-6 flex flex-col gap-4 flex-1 overflow-y-auto min-h-0">
+          {/* Chain Selector - Only show for Deposit */}
+          {activeTab === 'deposit' && (
+            <div className="relative flex justify-center gap-2 align-items">
+              <div>
+                <label className=" text-white text-[12px] leading-6 font-400 font-geist ">Chain:</label>
+              </div>
+              <div>
+              <button
+                onClick={() => setShowChainDropdown(!showChainDropdown)}
+                className="w-[249px] h-[31px] bg-white/5 border border-white/20 rounded-[8px] py-1.5 px-3.5 flex items-center justify-between hover:border-[#00ff41]/50 transition-all duration-200"
+                disabled={isProcessing}
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-6 h-6 rounded-full bg-gradient-to-br from-[#00ff41] to-[#00cc33] flex items-center justify-center">
+                    <span className="text-black text-xs font-bold">{selectedChain.key.substring(0, 2)}</span>
+                  </div>
+                  <span className="text-white font-medium">{selectedChain.name}</span>
+                </div>
+                <svg className="w-5 h-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              </div>
+              
+              
+              {/* Chain Dropdown */}
+              {showChainDropdown && (
+                <div className="absolute top-full left-0 right-0 mt-2 bg-[#0d0d0d] border border-[#2a2a2a] rounded-xl shadow-2xl max-h-60 overflow-y-auto z-50">
+                  {SUPPORTED_CHAINS.map((chain) => (
+                    <button
+                      key={chain.id}
+                      onClick={() => {
+                        setSelectedChain(chain);
+                        setShowChainDropdown(false);
+                      }}
+                      className="w-full px-4 py-3 flex items-center gap-3 hover:bg-[#1a1a1a] transition-all duration-200 text-left"
+                    >
+                      <div className="w-6 h-6 rounded-full bg-gradient-to-br from-[#00ff41] to-[#00cc33] flex items-center justify-center">
+                        <span className="text-black text-xs font-bold">{chain.key.substring(0, 2)}</span>
+                      </div>
+                      <span className="text-white">{chain.name}</span>
+                      {chain.id === selectedChain.id && (
+                        <svg className="w-5 h-5 text-[#00ff41] ml-auto" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                        </svg>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Chain Display - Only show for Withdraw (HyperEVM only, static) */}
+          {activeTab === 'withdraw' && (
+            <div className="flex justify-center gap-2 align-items">
+              <div>
+                <label className=" text-white text-[12px] leading-6 font-400 font-geist ">Chain:</label>
+              </div>
+              <div>
+                <div className="w-[249px] h-[31px] bg-white/5 border border-white/20 rounded-[8px] py-1.5 px-3.5 flex items-center gap-3">
+                  <div className="w-6 h-6 rounded-full bg-gradient-to-br from-[#00ff41] to-[#00cc33] flex items-center justify-center overflow-hidden">
+                   <img src="/image.png" alt="HyperEVM" className="w-full h-full object-cover" />
+                  </div>
+                  <span className="text-white font-medium">HyperEVM</span>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Amount Input Section */}
-          <div className="flex flex-col gap-1 px-4">
-            <div className="flex gap-1 h-11">
-              <input
+          
+            <div className="flex justify-between ">
+              <div className=' -ml-3'>
+                  <label className="text-white text-[12px] font-400  font-geist">{activeTab === 'deposit' ? 'Deposit' : 'Withdraw'}</label>
+              </div>
+            
+              <div className="flex items-center  -mr-3">
+                <span className="text-[#828892] text-[12px]">
+                  Available:{''}
+                  {(activeTab === 'deposit' && selectedChain.id !== 999) ? (
+                    <span className="text-[#fff] font-400">
+                      {isFetchingBalance ? '...' : `${parseFloat(selectedChainBalance || '0').toFixed(4)} ${selectedChain.key}`}
+                    </span>
+                  ) : (
+                    <span className="text-[#fff] font-400">
+                      {isLoading ? '...' : `${parseFloat(getBalanceToShow() || '0').toFixed(2)}`}
+                    </span>
+                  )}
+                </span>
+                <button
+                  onClick={setMaxAmount}
+                  disabled={isProcessing || isFetchingBalance}
+                  className="px-2 py-1  hover:text-[#fff] text-[#00ff41] text-xs rounded font-semibold transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Max
+                </button>
+            </div>
+          </div>
+
+          <div className="flex justify-between gap-2 ">
+            <div className=''>
+            <input
                 type="number"
-                className="flex-1 bg-black border border-[rgba(213,215,218,0.2)] py-2.5 px-3.5 text-[#717680] text-base outline-none transition-all duration-200 focus:border-[rgba(0,255,36,0.5)] focus:text-white placeholder:text-[#717680]"
-                placeholder="0.2"
+                className="-ml-3 flex-1 h-[30px] w-[212px] bg-white/5 border border-white/20 rounded-[8px] py-1.5 px-3.5 text-white text-base outline-none transition-all duration-200 focus:border-[#00ff41]/50 placeholder:text-gray-600"
+                placeholder="10"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
                 min="0"
                 step="0.01"
+                disabled={isProcessing}
               />
-              <div className="flex items-center gap-2 bg-black border border-[#2b2b2c] pl-2 pr-0 cursor-pointer transition-all duration-200 hover:border-[#3b3b3c]">
-                <div className="w-6 h-6 shrink-0">
-                  <img
-                    src="/SQISVYwX_400x400.jpg"
-                    alt="USDTO"
-                    className="w-full h-full object-cover rounded-full"
-                  />
+
+            </div>
+            <div className=''>
+             <button className="mr-1  h-[31px] w-[82px] bg-transparent/5 border border-white/20 rounded-[8px] px-2 flex items-center justify-between hover:border-[#00ff41]/50 transition-all duration-200 cursor-pointer">
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <div className="w-[16px] h-[16px] rounded-full overflow-hidden flex-shrink-0">
+                    <img
+                      src="/image.png"
+                      alt="HYPE"
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  <span className="text-white font-400 text-[12px] whitespace-nowrap">HYPE</span>
                 </div>
-                <span className="text-[#eeedec] text-base whitespace-nowrap pr-2">USDTO</span>
-                {/* <svg width="19" height="19" viewBox="0 0 19 19" fill="none" className="text-[#828892] mr-2">
-                  <path
-                    d="M4.75 7.125L9.5 11.875L14.25 7.125"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg> */}
-              </div>
+                <svg className="ml-1 w-[12px] h-[12px] text-gray-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+             </div>
+              {/* Token Selector */}
+             
             </div>
 
-            {/* Network Status */}
-            {networkInfo && (
-              <div className="px-4 mb-2">
-                <div className="text-xs py-1.5 px-2.5 rounded bg-black/30 border border-white/10 text-[#ccc] text-center">
-                  Network: {networkInfo.name} (Chain ID: {networkInfo.chainId})
-                  {networkInfo.chainId === 999 ? (
-                    <span className="text-[#00ff24] font-semibold"> ✅ HyperEVM</span>
-                  ) : (
-                    <span className="text-[#ff4444] font-semibold"> ❌ Wrong Network</span>
-                  )}
-                </div>
-              </div>
-            )}
 
-            {/* Available Balance */}
-            <div className="pr-4 pl-0 text-[#828892] text-sm text-right leading-6">
-              {isLoading ? (
-                <>Loading balance...</>
-              ) : (
-                <>
-                  {activeTab === 'deposit' ? 'Wallet' : 'Contract'} Balance:{' '}
-                  <span className="text-white">{parseFloat(getBalanceToShow()).toFixed(4)} USDTO</span>
-                </>
-              )}
+          {/* Processing Steps Indicator */}
+          {isProcessing && currentStep !== 'idle' && (
+            <div className="bg-[#1a3d2a]/20 border border-[#1a3d2a] rounded-xl p-4">
+              <div className="flex items-center gap-2 text-[#00ff41] text-[12px]">
+                <div className="w-4 h-4 border-2 border-[#00ff41] border-t-transparent rounded-full animate-spin" />
+                <span>
+                  {currentStep === 'approving' && 'Approving token access...'}
+                  {currentStep === 'bridging' && 'Bridging tokens to HyperEVM...'}
+                  {currentStep === 'depositing' && ' Processing deposit...'}
+                </span>
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Error Message */}
           {error && (
-            <div className="bg-[rgba(255,68,68,0.1)] border border-[rgba(255,68,68,0.3)] text-[#ff4444] py-3 px-4 mx-4 rounded-lg text-sm text-center animate-slide-down">
+            <div className="bg-red-500/10 border border-red-500/30 text-red-400 py-3 px-4 rounded-xl text-sm animate-slide-down">
               {error}
             </div>
           )}
 
           {/* Success Message */}
           {successMessage && (
-            <div className="bg-[rgba(0,255,36,0.1)] border border-[rgba(0,255,36,0.3)] text-[#00ff24] py-3 px-4 mx-4 rounded-lg text-sm text-center animate-slide-down">
+            <div className="bg-green-500/10 border border-green-500/30 text-[#00ff41] py-3 px-4 rounded-xl text-sm animate-slide-down">
               {successMessage}
             </div>
           )}
 
-          {/* Debug Info */}
-          {debugInfo && (
-            <div className="bg-black/30 border border-white/10 rounded-lg py-3 px-4 mx-4 text-xs">
-              <h4 className="m-0 mb-2 text-[#00ff24] text-sm">Debug Information:</h4>
-              <div className="grid grid-cols-2 gap-1 text-[#ccc]">
-                <div className="py-0.5">Wrapper Contract Exists: {debugInfo.wrapperContractExists ? '✅' : '❌'}</div>
-                <div className="py-0.5">Token Contract Exists: {debugInfo.tokenContractExists ? '✅' : '❌'}</div>
-                <div className="py-0.5">
-                  Supports depositToken: {debugInfo.wrapperSupportsDepositToken ? '✅' : '❌'}
-                </div>
-                <div className="py-0.5">Token Symbol: {debugInfo.tokenSymbol}</div>
-                <div className="py-0.5">Token Decimals: {debugInfo.tokenDecimals}</div>
-                <div className="py-0.5">Your USDTO Balance: {debugInfo.userTokenBalance}</div>
-                <div className="py-0.5">Approval Amount: {debugInfo.userApproval}</div>
-                <div className="py-0.5">Token Address: {debugInfo.tokenAddress}</div>
-                <div className="py-0.5">Wrapper Address: {debugInfo.wrapperAddress}</div>
-                <div className="py-0.5">RPC URL: {debugInfo.rpcUrl}</div>
-              </div>
-            </div>
-          )}
+          {/* Action Button */}
+          <button
+            onClick={handleSubmit}
+            disabled={isProcessing || isLoading || !amount || parseFloat(amount) <= 0}
+            className="w-full h-[44px] bg-[#00FF24] hover:bg-[#000] hover:border hover:text-[#fff] cursor-pointer text-black font-400 text-[16px] py-1 px-3 rounded-lg transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98] flex items-center justify-center gap-[10px] font-geistMono mt-auto"
+          >
+            {isProcessing ? (
+              <>
+                <div className="w-5 h-5 border-2 border-black border-t-transparent rounded-full animate-spin" />
+                {getButtonText()}
+              </>
+            ) : (
+              getButtonText()
+            )}
+          </button>
 
-          {/* Action Buttons */}
-          <div className="flex flex-col gap-3 w-full">
-            <button
-              className={`w-full border-none py-5 px-4 text-xl font-normal cursor-pointer flex items-center justify-center gap-2.5 tracking-[-0.8px] transition-all duration-200 mt-[30%] ${
-                activeTab === 'deposit' && !isApproved
-                  ? 'bg-[#00ff24] text-[#1b273a] font-semibold animate-pulse hover:bg-[#00e020] hover:-translate-y-0.5'
-                  : 'bg-white text-[#1b273a] hover:bg-[#00ff24] hover:text-[#605d5d] hover:border-t hover:border-t-[#605d5d]'
-              } active:translate-y-0 disabled:bg-white/30 disabled:text-[rgba(27,39,58,0.5)] disabled:cursor-not-allowed`}
-              onClick={activeTab === 'deposit' && !isApproved ? handleApprove : handleSubmit}
-              disabled={
-                isProcessing ||
-                isLoading ||
-                (activeTab === 'deposit' && isApproved && (!amount || parseFloat(amount) <= 0)) ||
-                (activeTab === 'withdraw' && (!amount || parseFloat(amount) <= 0))
-              }
-            >
-              {isProcessing
-                ? activeTab === 'deposit' && !isApproved
-                  ? 'Approving...'
-                  : 'Processing...'
-                : activeTab === 'deposit'
-                ? isApproved
-                  ? 'Deposit'
-                  : 'Approve USDTO'
-                : 'Withdraw'}
-              {!isProcessing && (
-                <svg width="19" height="16" viewBox="0 0 19 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path
-                    fillRule="evenodd"
-                    clipRule="evenodd"
-                    d="M9.5 8L3.58507 14L2.5 12.8993L7.32986 8L2.5 3.10223L3.58507 2L9.5 8Z"
-                    fill="#1B273A"
-                  />
-                  <path
-                    fillRule="evenodd"
-                    clipRule="evenodd"
-                    d="M16.5 8L10.5851 14L9.5 12.8993L14.3299 8L9.5 3.10223L10.5851 2L16.5 8Z"
-                    fill="#1B273A"
-                  />
-                </svg>
-              )}
-            </button>
+          {/* Powered by LiFi */}
+          <div className="text-center text-gray-500 text-sm">
+            Powered By Lifi
           </div>
         </div>
       </div>
+      </div>
+
+      {/* Li.Fi Widget Modal */}
+      {showLiFiWidget && (
+        <div 
+          className="fixed inset-0 bg-black/95 z-[10003] flex items-center justify-center"
+          onClick={() => setShowLiFiWidget(false)}
+        >
+          <div 
+            className="relative w-full max-w-[440px] h-[680px]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => setShowLiFiWidget(false)}
+              className="absolute -top-12 right-0 text-white hover:text-gray-300 text-sm flex items-center gap-2 z-10"
+            >
+              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+              Close Bridge
+            </button>
+            <LiFiWidget
+              config={{
+                appearance: 'dark',
+                theme: {
+                  palette: {
+                    primary: { main: '#00ff24' },
+                    secondary: { main: '#1a3d2a' },
+                    background: { default: '#0a1810', paper: '#0d1f16' },
+                  },
+                },
+                chains: {
+                  allow: [1, 42161], // Ethereum and Arbitrum for now
+                },
+                toChain: 999, // HyperEVM as destination
+                toToken: '0x0E08C8B9654eeB89E116B11F0Bd3d79ccdfF2883', // USDTO
+                fromAmount: amount,
+              }}
+              integrator="Mercury Trading"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
