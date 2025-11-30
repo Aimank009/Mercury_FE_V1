@@ -1817,7 +1817,7 @@ export default function TradingChart({
         if (distanceFromNowLine < hideThreshold) {
           continue; // Skip drawing this label
         }
-        const timeOffset = i * GRID_SEC ;  // ADD GRID_SEC to shift labels 5 seconds left
+        const timeOffset = i * GRID_SEC;  // ADD GRID_SEC to shift labels 5 seconds left
         const tOffsetSec = timeOffset - (now % GRID_SEC);
         const tCell = now + tOffsetSec - timeOffsetRef.current;
         const secondsFromNow = Math.round(tCell - now);
