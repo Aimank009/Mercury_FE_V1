@@ -38,17 +38,17 @@ export async function fetchAllUsersBets(
     const startTimeperiodId = Math.floor((currentTime - halfWindow) / 5) * 5;
     const endTimeperiodId = Math.floor((currentTime + halfWindow) / 5) * 5;
 
-    console.log('🔍 Fetching all users bets:', {
-      currentTime,
-      startTimeperiodId,
-      endTimeperiodId,
-      priceMin,
-      priceMax,
-      halfWindow,
-      lookingBack: `${halfWindow}s (${halfWindow / 60}min)`,
-      lookingForward: `${halfWindow}s (${halfWindow / 60}min)`,
-      totalWindow: `${timeWindowSeconds}s (${timeWindowSeconds / 60}min)`
-    });
+    // console.log('🔍 Fetching all users bets:', {
+    //   currentTime,
+    //   startTimeperiodId,
+    //   endTimeperiodId,
+    //   priceMin,
+    //   priceMax,
+    //   halfWindow,
+    //   lookingBack: `${halfWindow}s (${halfWindow / 60}min)`,
+    //   lookingForward: `${halfWindow}s (${halfWindow / 60}min)`,
+    //   totalWindow: `${timeWindowSeconds}s (${timeWindowSeconds / 60}min)`
+    // });
 
     // Query bet_placed_with_session table which has price_min and price_max
     const { data, error } = await supabase

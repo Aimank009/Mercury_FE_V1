@@ -24,40 +24,43 @@ module.exports = {
       },
       keyframes: {
         'slide-down': {
-          '0%': { opacity: '0', transform: 'translateY(-10px)' },
+          '0%': { opacity: '0', transform: 'translateX(-50%) translateY(-10px)' },
+          '100%': { opacity: '1', transform: 'translateX(-50%) translateY(0)' },
+        },
+        'fade-in': {
+          '0%': { opacity: '0' },
+          '100%': { opacity: '1' },
+        },
+        'slide-up': {
+          '0%': { opacity: '0', transform: 'translateY(30px)' },
           '100%': { opacity: '1', transform: 'translateY(0)' },
         },
+        pulse: {
+          '0%, 100%': { boxShadow: '0 0 0 0 rgba(0, 255, 36, 0.7)' },
+          '50%': { boxShadow: '0 0 0 10px rgba(0, 255, 36, 0)' },
+        },
+        'session-slide-in': {
+          '0%': { transform: 'translateX(400px)', opacity: '0' },
+          '100%': { transform: 'translateX(0)', opacity: '1' },
+        },
+        'session-slide-out': {
+          '0%': { transform: 'translateX(0)', opacity: '1' },
+          '100%': { transform: 'translateX(400px)', opacity: '0' },
+        },
+        'order-spin': {
+          'to': { transform: 'rotate(360deg)' },
+        },
       },
-      'fade-in': {
-        '0%': { opacity: '0' },
-        '100%': { opacity: '1' },
-      },
-      'slide-up': {
-        '0%': { opacity: '0', transform: 'translateY(30px)' },
-        '100%': { opacity: '1', transform: 'translateY(0)' },
-      },
-      pulse: {
-        '0%, 100%': { boxShadow: '0 0 0 0 rgba(0, 255, 36, 0.7)' },
-        '50%': { boxShadow: '0 0 0 10px rgba(0, 255, 36, 0)' },
-      },
-      'session-slide-in': {
-      '0%': { transform: 'translateX(400px)', opacity: '0' },
-      '100%': { transform: 'translateX(0)', opacity: '1' },
-    },
-    'session-slide-out': {
-      '0%': { transform: 'translateX(0)', opacity: '1' },
-      '100%': { transform: 'translateX(400px)', opacity: '0' },
-    },
-    },
       animation: {
-        'slide-down': 'slide-down 0.2s ease-out',
+        'slide-down': 'slide-down 0.3s ease-out',
         'fade-in': 'fade-in 0.3s ease',
         'slide-up': 'slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
         pulse: 'pulse 2s infinite',
         'session-slide-in': 'session-slide-in 0.3s ease-out forwards',
-    'session-slide-out': 'session-slide-out 0.3s ease-out forwards',
-  
+        'session-slide-out': 'session-slide-out 0.3s ease-out forwards',
+        'order-spin': 'order-spin 1.1s linear infinite',
       },
+    },
   },
   plugins: [],
 }

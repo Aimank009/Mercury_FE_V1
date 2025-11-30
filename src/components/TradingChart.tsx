@@ -18,7 +18,6 @@ import { UserBet } from '../hooks/useRealtimeBets';
 import { useSettlementsWebSocket } from '../hooks/useSettlementsWebSocket';
 import { supabase } from '../lib/supabaseClient';
 import { PRICE_STEP, PRICE_DECIMALS, GRID_CONFIG, CHART_CONFIG, CHART_COLORS } from '../config';
-import styles from './TradingChart.module.css';
 
 const OTHER_USER_SETTLEMENT_TTL = 30_000; // milliseconds to keep other users' win/loss highlights visible
 
@@ -79,9 +78,12 @@ export default function TradingChart({
       // console.log(`✅ Processing NEW settlement for timeperiod ${settlementTimeperiodId}`);
       
       const settlementTimeperiodIdNum = parseInt(settlementTimeperiodId);
-      const settlementPrice = parseFloat(settlementsMessage.price) / 1e8;
       
-      console.log(`\n🏆 Settlement received: timeperiod ${settlementTimeperiodIdNum}, price $${settlementPrice.toFixed(priceDecimals)}`);
+      // Extract price range from settlement message (new format: price_min and price_max)
+      const settlementPriceMin = parseFloat(settlementsMessage.price_min || settlementsMessage.price) / 1e8;
+      const settlementPriceMax = parseFloat(settlementsMessage.price_max || settlementsMessage.price) / 1e8;
+      
+      console.log(`\n🏆 Settlement received: timeperiod ${settlementTimeperiodIdNum}, price range $${settlementPriceMin.toFixed(priceDecimals)} - $${settlementPriceMax.toFixed(priceDecimals)}`);
       
       try {
         // Query user's bets for this timeperiod
@@ -109,8 +111,10 @@ export default function TradingChart({
           const priceMin = parseFloat(bet.price_min) / 1e8;
           const priceMax = parseFloat(bet.price_max) / 1e8;
           
-          // Check if settlement price is within bet's price range
-          const isWin = settlementPrice >= priceMin && settlementPrice <= priceMax;
+          // Check if settlement price range OVERLAPS with bet's price range
+          // A bet wins if there's any overlap between [settlementPriceMin, settlementPriceMax] and [priceMin, priceMax]
+          // Overlap exists if: settlementPriceMin < priceMax && settlementPriceMax > priceMin
+          const isWin = settlementPriceMin < priceMax && settlementPriceMax > priceMin;
           const newStatus = isWin ? 'won' : 'lost';
           
           // Calculate cell key to find the bet in UI
@@ -140,12 +144,14 @@ export default function TradingChart({
           console.log(`     Final multiplier (${isWin ? 'WIN' : 'LOSS'}): ${finalMultiplier.toFixed(2)}X`);
           
           // Update database with settlement result
+          // Store the middle price of the settlement range as the settlement_price for backward compatibility
+          const settlementPriceMiddle = (settlementPriceMin + settlementPriceMax) / 2;
           const { error: updateError } = await supabase
             .from('bet_placed_with_session')
             .update({ 
               status: newStatus, 
               settled_at: new Date().toISOString(),
-              settlement_price: Math.floor(settlementPrice * 1e8), // Store in cents
+              settlement_price: Math.floor(settlementPriceMiddle * 1e8), // Store middle of range for backward compatibility
               multiplier: finalMultiplier // Keep multiplier if win, 0 if loss
             })
             .eq('event_id', bet.event_id);
@@ -228,14 +234,19 @@ export default function TradingChart({
     if (!settlementsMessage) return;
 
     const settlementTimeperiodId = parseInt(settlementsMessage.timeperiod_id, 10);
-    const settlementPriceRaw = settlementsMessage.price;
+    
+    // Extract price range from settlement message (new format: price_min and price_max)
+    const settlementPriceMinRaw = settlementsMessage.price_min || settlementsMessage.price;
+    const settlementPriceMaxRaw = settlementsMessage.price_max || settlementsMessage.price;
 
-    if (Number.isNaN(settlementTimeperiodId) || !settlementPriceRaw) {
+    if (Number.isNaN(settlementTimeperiodId) || !settlementPriceMinRaw || !settlementPriceMaxRaw) {
       return;
     }
 
-    const settlementPrice = parseFloat(settlementPriceRaw) / 1e8;
-    if (Number.isNaN(settlementPrice)) {
+    const settlementPriceMin = parseFloat(settlementPriceMinRaw) / 1e8;
+    const settlementPriceMax = parseFloat(settlementPriceMaxRaw) / 1e8;
+    
+    if (Number.isNaN(settlementPriceMin) || Number.isNaN(settlementPriceMax)) {
       return;
     }
 
@@ -269,7 +280,10 @@ export default function TradingChart({
           // Create grid_id matching the format used in allUsersBetsRef
           const gridId = `${settlementTimeperiodId}_${priceMin.toFixed(2)}_${priceMax.toFixed(2)}`;
 
-          const status: 'win' | 'loss' = settlementPrice >= priceMin && settlementPrice <= priceMax ? 'win' : 'loss';
+          // Check if settlement price range OVERLAPS with bet's price range
+          // A bet wins if there's any overlap between [settlementPriceMin, settlementPriceMax] and [priceMin, priceMax]
+          // Overlap exists if: settlementPriceMin < priceMax && settlementPriceMax > priceMin
+          const status: 'win' | 'loss' = settlementPriceMin < priceMax && settlementPriceMax > priceMin ? 'win' : 'loss';
           otherUsersSettlementsRef.current.set(gridId, { status, timestamp: nowTs });
           updated = true;
         });
@@ -284,6 +298,107 @@ export default function TradingChart({
 
     checkAllBets();
   }, [settlementsMessage, forceUpdate]);
+
+  // Real-time activity feed: Track settlements (wins)
+  useEffect(() => {
+    if (!settlementsMessage || !address) return;
+    
+    const settlementTimeperiodId = settlementsMessage.timeperiod_id;
+    
+    // Extract price range from settlement message (new format: price_min and price_max)
+    const settlementPriceMin = parseFloat(settlementsMessage.price_min || settlementsMessage.price) / 1e8;
+    const settlementPriceMax = parseFloat(settlementsMessage.price_max || settlementsMessage.price) / 1e8;
+    
+    // Query all bets for this timeperiod to show wins in activity feed
+    const updateActivityFeedFromSettlement = async () => {
+      try {
+        const { data: allBets } = await supabase
+          .from('bet_placed_with_session')
+          .select('user_address, amount, multiplier, price_min, price_max')
+          .eq('timeperiod_id', settlementTimeperiodId);
+        
+        if (!allBets || allBets.length === 0) return;
+        
+        const newActivities: typeof activityFeed = [];
+        
+        // Process each bet to find winners
+        allBets.forEach((bet) => {
+          const priceMin = parseFloat(bet.price_min) / 1e8;
+          const priceMax = parseFloat(bet.price_max) / 1e8;
+          
+          // Check if settlement price range OVERLAPS with bet's price range
+          // A bet wins if there's any overlap between [settlementPriceMin, settlementPriceMax] and [priceMin, priceMax]
+          // Overlap exists if: settlementPriceMin < priceMax && settlementPriceMax > priceMin
+          const isWin = settlementPriceMin < priceMax && settlementPriceMax > priceMin;
+          
+          if (isWin) {
+            const amount = parseFloat(bet.amount) / 1e6;
+            const multiplier = bet.multiplier ? parseFloat(bet.multiplier.toString()) : 0;
+            const isYou = bet.user_address.toLowerCase() === address.toLowerCase();
+            const username = isYou ? undefined : bet.user_address.slice(0, 6);
+            
+            newActivities.push({
+              id: `${bet.user_address}_${settlementTimeperiodId}_${Date.now()}_${Math.random()}`,
+              type: 'won',
+              username,
+              amount,
+              multiplier,
+              isYou,
+              timestamp: Date.now(),
+            });
+          }
+        });
+        
+        // Add pool addition entry (sum of all bet amounts for this settlement)
+        const totalPool = allBets.reduce((sum, bet) => sum + parseFloat(bet.amount) / 1e6, 0);
+        if (totalPool > 0) {
+          newActivities.push({
+            id: `pool_${settlementTimeperiodId}_${Date.now()}_${Math.random()}`,
+            type: 'pool_added',
+            amount: totalPool,
+            isYou: false,
+            timestamp: Date.now(),
+          });
+        }
+        
+        // Add new activities to the top of the feed
+        if (newActivities.length > 0) {
+          // Mark new items as highlighted
+          const highlightedActivities = newActivities.map(activity => ({
+            ...activity,
+            isNew: true
+          }));
+          
+          setActivityFeed((prev) => {
+            const combined = [...highlightedActivities, ...prev];
+            return combined.slice(0, 20); // Keep last 20 items
+          });
+          
+          // Auto-scroll to top to show new items
+          setTimeout(() => {
+            if (activityFeedRef.current) {
+              activityFeedRef.current.scrollTop = 0;
+            }
+          }, 10);
+          
+          // Remove highlight after 3 seconds
+          setTimeout(() => {
+            setActivityFeed((prev) => 
+              prev.map(item => 
+                highlightedActivities.some(na => na.id === item.id) 
+                  ? { ...item, isNew: false }
+                  : item
+              )
+            );
+          }, 3000);
+        }
+      } catch (error) {
+        console.error('Error updating activity feed from settlement:', error);
+      }
+    };
+    
+    updateActivityFeedFromSettlement();
+  }, [settlementsMessage, address]);
 
   // Periodically clean up stale settlement highlights
   useEffect(() => {
@@ -310,6 +425,26 @@ export default function TradingChart({
   const priceRef = useRef<number>(wsPrice > 0 ? wsPrice : (initialBasePrice || 38.12));
   const targetPriceRef = useRef<number>(wsPrice > 0 ? wsPrice : (initialBasePrice || 38.12));
   const historyRef = useRef<DataPoint[]>([]);
+  // Custom cursor SVG converted to data URL
+  const customCursorSVG = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg width="27" height="27" viewBox="0 0 27 27" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g filter="url(#filter0_d_602_38673)">
+<path d="M13.3501 1.6001C19.2873 1.6001 24.1001 6.41288 24.1001 12.3501C24.1001 18.2873 19.2873 23.1001 13.3501 23.1001C7.41288 23.1001 2.6001 18.2873 2.6001 12.3501C2.6001 6.41288 7.41288 1.6001 13.3501 1.6001ZM12.6001 14.3501V13.1001H11.3501C10.9359 13.1001 10.6001 12.7643 10.6001 12.3501C10.6001 11.9359 10.9359 11.6001 11.3501 11.6001H12.6001V10.3501C12.6001 9.93588 12.9359 9.6001 13.3501 9.6001C13.7643 9.6001 14.1001 9.93588 14.1001 10.3501V11.6001H15.3501C15.7643 11.6001 16.1001 11.9359 16.1001 12.3501C16.1001 12.7643 15.7643 13.1001 15.3501 13.1001H14.1001V14.3501C14.1001 14.7643 13.7643 15.1001 13.3501 15.1001C12.9359 15.1001 12.6001 14.7643 12.6001 14.3501ZM12.6001 5.3501V3.13232C8.08964 3.49429 4.49531 7.08965 4.1333 11.6001H6.3501C6.76431 11.6001 7.1001 11.9359 7.1001 12.3501C7.1001 12.7643 6.76431 13.1001 6.3501 13.1001H4.1333C4.4953 17.6105 8.08967 21.2049 12.6001 21.5669V19.3501C12.6001 18.9359 12.9359 18.6001 13.3501 18.6001C13.7643 18.6001 14.1001 18.9359 14.1001 19.3501V21.5669C18.6105 21.2049 22.2049 17.6105 22.5669 13.1001H20.3501C19.9359 13.1001 19.6001 12.7643 19.6001 12.3501C19.6001 11.9359 19.9359 11.6001 20.3501 11.6001H22.5669C22.2049 7.08965 18.6106 3.49429 14.1001 3.13232V5.3501C14.1001 5.76431 13.7643 6.1001 13.3501 6.1001C12.9359 6.1001 12.6001 5.76431 12.6001 5.3501Z" fill="#E9E9DD"/>
+<path d="M13.3501 1.30029C19.453 1.30029 24.3999 6.2472 24.3999 12.3501C24.3999 18.453 19.453 23.3999 13.3501 23.3999C7.2472 23.3999 2.30029 18.453 2.30029 12.3501C2.30029 6.2472 7.2472 1.30029 13.3501 1.30029ZM14.3999 5.3501C14.3999 5.93 13.93 6.3999 13.3501 6.3999C12.7702 6.3999 12.3003 5.93 12.3003 5.3501V3.46436C8.19688 3.9437 4.94467 7.19677 4.46533 11.3003H6.3501C6.93 11.3003 7.3999 11.7702 7.3999 12.3501C7.3999 12.93 6.93 13.3999 6.3501 13.3999H4.46533C4.94466 17.5033 8.19693 20.7545 12.3003 21.2339V19.3501C12.3003 18.7702 12.7702 18.3003 13.3501 18.3003C13.93 18.3003 14.3999 18.7702 14.3999 19.3501V21.2339C18.5033 20.7545 21.7555 17.5033 22.2349 13.3999H20.3501C19.7702 13.3999 19.3003 12.93 19.3003 12.3501C19.3003 11.7702 19.7702 11.3003 20.3501 11.3003H22.2349C21.7555 7.19677 18.5033 3.9437 14.3999 3.46436V5.3501ZM13.3501 9.30029C13.93 9.30029 14.3999 9.7702 14.3999 10.3501V11.3003H15.3501C15.93 11.3003 16.3999 11.7702 16.3999 12.3501C16.3999 12.93 15.93 13.3999 15.3501 13.3999H14.3999V14.3501C14.3999 14.93 13.93 15.3999 13.3501 15.3999C12.7702 15.3999 12.3003 14.93 12.3003 14.3501V13.3999H11.3501C10.7702 13.3999 10.3003 12.93 10.3003 12.3501C10.3003 11.7702 10.7702 11.3003 11.3501 11.3003H12.3003V10.3501C12.3003 9.7702 12.7702 9.30029 13.3501 9.30029Z" stroke="black" stroke-width="0.6" stroke-linecap="round" stroke-linejoin="round"/>
+</g>
+<defs>
+<filter id="filter0_d_602_38673" x="0" y="0" width="26.7002" height="26.7002" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+<feFlood flood-opacity="0" result="BackgroundImageFix"/>
+<feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+<feOffset dy="1"/>
+<feGaussianBlur stdDeviation="1"/>
+<feComposite in2="hardAlpha" operator="out"/>
+<feColorMatrix type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.3 0"/>
+<feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_602_38673"/>
+<feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_602_38673" result="shape"/>
+</filter>
+</defs>
+</svg>`)}`;
+
   const hoverRef = useRef<{
     t: number;
     gyIndex: number;
@@ -356,6 +491,20 @@ export default function TradingChart({
   const recenterStartPriceOffsetRef = useRef<number>(0); // Store starting price offset for animation
   const recenterStartTimeOffsetRef = useRef<number>(0); // Store starting time offset for animation
   const recenterStartTimeRef = useRef<number>(0); // Store animation start time
+  const [isScrolled, setIsScrolled] = useState<boolean>(false); // Track if chart is scrolled for recenter button visibility
+  
+  // Real-time activity feed state
+  const [activityFeed, setActivityFeed] = useState<Array<{
+    id: string;
+    type: 'won' | 'pool_added';
+    username?: string;
+    amount: number;
+    multiplier?: number;
+    isYou: boolean;
+    timestamp: number;
+    isNew?: boolean; // Track if item is newly added
+  }>>([]);
+  const activityFeedRef = useRef<HTMLDivElement>(null);
 
   const [showOrderPopup, setShowOrderPopup] = useState(false);
   const [orderDetails, setOrderDetails] = useState<{ count: number; cells: Array<{ t: number; priceLevel: number }> } | null>(null);
@@ -724,6 +873,79 @@ export default function TradingChart({
     }
   }, [realtimeBets, address]); // Added address to dependencies
 
+  // Real-time activity feed: Track new bets (pool additions)
+  const previousBetsCountRef = useRef<number>(0);
+  useEffect(() => {
+    if (!realtimeBets || realtimeBets.length === 0) return;
+    
+    const currentBetsCount = realtimeBets.length;
+    const previousBetsCount = previousBetsCountRef.current;
+    
+    // If new bets were added, add "Added to pool" entries
+    if (currentBetsCount > previousBetsCount) {
+      const newBets = realtimeBets.slice(previousBetsCount);
+      
+      // Group new bets by timeperiod to show combined pool additions
+      const betsByTimeperiod = new Map<number, typeof realtimeBets>();
+      
+      newBets.forEach((bet) => {
+        const timeperiodId = bet.timeperiod_id;
+        if (!betsByTimeperiod.has(timeperiodId)) {
+          betsByTimeperiod.set(timeperiodId, []);
+        }
+        betsByTimeperiod.get(timeperiodId)!.push(bet);
+      });
+      
+      // Create "Added to pool" entries for each timeperiod
+      const newPoolActivities: typeof activityFeed = [];
+      
+      betsByTimeperiod.forEach((bets, timeperiodId) => {
+        const totalAmount = bets.reduce((sum, bet) => sum + bet.amount, 0);
+        
+        newPoolActivities.push({
+          id: `pool_bet_${timeperiodId}_${Date.now()}_${Math.random()}`,
+          type: 'pool_added',
+          amount: totalAmount,
+          isYou: false,
+          timestamp: Date.now(),
+        });
+      });
+      
+      if (newPoolActivities.length > 0) {
+        // Mark new items as highlighted
+        const highlightedActivities = newPoolActivities.map(activity => ({
+          ...activity,
+          isNew: true
+        }));
+        
+        setActivityFeed((prev) => {
+          const combined = [...highlightedActivities, ...prev];
+          return combined.slice(0, 20); // Keep last 20 items
+        });
+        
+        // Auto-scroll to top to show new items
+        setTimeout(() => {
+          if (activityFeedRef.current) {
+            activityFeedRef.current.scrollTop = 0;
+          }
+        }, 10);
+        
+        // Remove highlight after 3 seconds
+        setTimeout(() => {
+          setActivityFeed((prev) => 
+            prev.map(item => 
+              highlightedActivities.some(na => na.id === item.id) 
+                ? { ...item, isNew: false }
+                : item
+            )
+          );
+        }, 3000);
+      }
+    }
+    
+    previousBetsCountRef.current = currentBetsCount;
+  }, [realtimeBets]);
+
   // Manage mounted state to prevent requests during reload/unmount
   useEffect(() => {
     // Component is mounted
@@ -996,17 +1218,17 @@ export default function TradingChart({
               isOptimistic: true  // Flag as optimistic
             });
             
-            console.log('⚡ OPTIMISTIC multiplier (instant):', {
-              cacheKey,
-              previousShares: previousExistingShares,
-              newBetShares: bet.shares,
-              estimatedTotal: estimatedExistingShares,
-              basePrice: effectiveBasePrice,
-              dynamicB: bNumber.toFixed(2),
-              price: currentPrice.toFixed(4),
-              multiplier: optimisticMultiplier.toFixed(2) + 'x',
-              latency: '<1ms'
-            });
+            // console.log('⚡ OPTIMISTIC multiplier (instant):', {
+            //   cacheKey,
+            //   previousShares: previousExistingShares,
+            //   newBetShares: bet.shares,
+            //   estimatedTotal: estimatedExistingShares,
+            //   basePrice: effectiveBasePrice,
+            //   dynamicB: bNumber.toFixed(2),
+            //   price: currentPrice.toFixed(4),
+            //   multiplier: optimisticMultiplier.toFixed(2) + 'x',
+            //   latency: '<1ms'
+            // });
 
             // ✅ STEP 2: FETCH REAL DATA (background - non-blocking)
             if (typeof (bet as any).total_share === 'number') {
@@ -1265,31 +1487,39 @@ export default function TradingChart({
       
       const priceOffset = priceOffsetRef.current; // Get vertical pan offset once
 
-      // Clear canvas with dark background
-      ctx.fillStyle = "#141414";
-      ctx.fillRect(0, 0, w, h);
+      // Clear canvas with transparent background to allow gradient to show through
+      ctx.clearRect(0, 0, w, h);
 
       const baseOffsetX = (now % GRID_SEC) * pxPerSec;
-      const offsetX = baseOffsetX - (timeOffsetRef.current % GRID_SEC) * pxPerSec;
+      const offsetX = baseOffsetX - (timeOffsetRef.current % GRID_SEC) * pxPerSec - (GRID_SEC / 2) * pxPerSec;
       const visible = historyRef.current.filter((d) => now - d.t < DURATION);
       const prices = visible.map((d) => d.v);
       const minPrice = Math.min(...prices, price - 0.3);
       const maxPrice = Math.max(...prices, price + 0.3);
       const range = maxPrice - minPrice;
 
-      // Draw grid
+      // Draw grid - make lines more vibrant and clear
       ctx.strokeStyle = CHART_COLORS.GRID_LINE;
       ctx.lineWidth = 1;
+      ctx.globalAlpha = 1; // Ensure full opacity for grid lines
       const gridW = CELL_SIZE;
       const gridH = CELL_SIZE;
+      
+      // Width of area reserved for price labels - grid lines should not overlap this area
+      // Price labels are drawn at x=60, so we start grid lines just after them with a small gap
+      const priceLabelAreaWidth = 68;
 
       // Vertical grid lines (time)
+      // Skip the left area where price labels are displayed (avoid overlap with price labels)
       for (let i = -Math.ceil(w / gridW) - 1; i < Math.ceil(w / gridW) + 2; i++) {
         const x = centerX + i * gridW - offsetX;
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, h);
-        ctx.stroke();
+        // Only draw vertical lines that are to the right of the price label area
+        if (x >= priceLabelAreaWidth) {
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, h);
+          ctx.stroke();
+        }
       }
 
       // Horizontal grid lines (price)
@@ -1306,11 +1536,12 @@ export default function TradingChart({
       const numPriceLevels = Math.ceil(visiblePriceRange / priceStep) + 2; // +2 for buffer
       
       // Draw grid lines for all visible price levels
+      // Skip the left area where price labels are displayed (start after price label area to avoid overlap)
       for (let i = 0; i < numPriceLevels; i++) {
         const priceLevel = startPrice + i * priceStep;
         const y = h / 2 - (priceLevel - price - priceOffset) * pxPerPrice;
         ctx.beginPath();
-        ctx.moveTo(0, y);
+        ctx.moveTo(priceLabelAreaWidth, y); // Start after price label area
         ctx.lineTo(w, y);
         ctx.stroke();
       }
@@ -1345,8 +1576,8 @@ export default function TradingChart({
 
       // Draw price line - following Figma design exactly
       if (visible.length > 1) {
-        const oldestX = centerX - (now - visible[0].t) * pxPerSec + (timeOffsetRef.current * pxPerSec);
-        const nowX = centerX + (timeOffsetRef.current * pxPerSec);
+        const oldestX = centerX - (now - visible[0].t) * pxPerSec + (timeOffsetRef.current * pxPerSec) + (GRID_SEC / 2) * pxPerSec - GRID_SEC * pxPerSec;
+        const nowX = centerX + (timeOffsetRef.current * pxPerSec) - GRID_SEC * pxPerSec;
         
         // Create gradient from Figma: #00FF24 (bright green) to #046712 (darker green at 40%)
         const lineGradient = ctx.createLinearGradient(oldestX, 0, nowX, 0);
@@ -1368,7 +1599,7 @@ export default function TradingChart({
         
         ctx.beginPath();
         visible.forEach((d, i) => {
-          const x = centerX - (now - d.t) * pxPerSec + (timeOffsetRef.current * pxPerSec);
+          const x = centerX - (now - d.t) * pxPerSec + (timeOffsetRef.current * pxPerSec) + (GRID_SEC / 2) * pxPerSec - GRID_SEC * pxPerSec;
           const y = h / 2 - (d.v - price - priceOffset) * pxPerPrice;
           if (i === 0) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
@@ -1382,27 +1613,140 @@ export default function TradingChart({
       }
 
       // Calculate NOW line position once (moves with time offset)
-      const nowLineX = centerX + (timeOffsetRef.current * pxPerSec);
+      const nowLineX = centerX + (timeOffsetRef.current * pxPerSec) +(GRID_SEC / 2) * pxPerSec - GRID_SEC * pxPerSec;
 
-      // Green NOW line - moves with time offset
-      ctx.strokeStyle = "#00ff24";
-      ctx.lineWidth = 1.5;
+      // Green NOW line - moves with time offset (dashed with colored gaps)
+      // First draw solid line in gap color
+      ctx.strokeStyle = "#162A19";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([]); // Solid line
       ctx.beginPath();
       ctx.moveTo(nowLineX, 0);
       ctx.lineTo(nowLineX, h);
       ctx.stroke();
 
-      ctx.font = "900 16px 'Geist Mono',monospace";
-      ctx.textAlign = "center";
-      
-      // Draw NOW text with black border
-      ctx.strokeStyle = "#000000";
+      // Then draw dashed line on top (gaps will show the gap color underneath)
+      // #00ff24 at 20% opacity = rgba(0, 255, 36, 0.2)
+      ctx.strokeStyle = "rgba(0, 255, 36, 0.4)";
       ctx.lineWidth = 1;
-      ctx.strokeText("NOW", nowLineX, 20);
+      ctx.setLineDash([15, 15]); // Dashed pattern: 15px dash, 15px gap
+      ctx.beginPath();
+      ctx.moveTo(nowLineX, 0);
+      ctx.lineTo(nowLineX, h);
+      ctx.stroke();
+      ctx.setLineDash([]); // Reset to solid line
+
+      // Draw upward-pointing triangle arrow at the very top
+      const arrowSize = 7; // Size of the triangle
+      const arrowY = 0; // Position at the top
+      const triangleBottomY = arrowY + arrowSize; // Bottom of top triangle
+      
+      // Draw drop shadow for arrow
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+      ctx.shadowBlur = 1.45;
+      ctx.shadowColor = "rgba(0, 255, 36, 0.15)";
+      
+      // Draw the triangle (upward pointing)
+      ctx.beginPath();
+      ctx.moveTo(nowLineX, triangleBottomY); // Bottom point
+      ctx.lineTo(nowLineX - arrowSize, arrowY); // Top left
+      ctx.lineTo(nowLineX + arrowSize, arrowY); // Top right
+      ctx.closePath();
+      ctx.fillStyle = "#00FF24";
+      ctx.fill();
+      
+      // Reset shadow
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = "transparent";
+
+      // Draw NOW text background and border exactly as per CSS
+      // Position NOW text below the triangle with spacing
+      const textY = triangleBottomY + 10; // Position below triangle
+      
+      ctx.font = "500 9px 'Geist Mono',monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      
+      // Measure text to calculate background size
+      const textMetrics = ctx.measureText("now");
+      const textWidth = textMetrics.width;
+      const textHeight = 9; // Font size
+      
+      // CSS specs: Padding Top: 7px, Right: 8px, Bottom: 7px, Left: 8px
+      const paddingTop = 7;
+      const paddingRight = 8;
+      const paddingBottom = 7;
+      const paddingLeft = 8;
+      
+      // Calculate background dimensions
+      const bgWidth = textWidth + paddingLeft + paddingRight;
+      const bgHeight = textHeight + paddingTop + paddingBottom;
+      const bgX = nowLineX - bgWidth / 2;
+      const bgY = textY - bgHeight / 2; // Center vertically at textY
+      
+      // CSS: Radius: 24px
+      const borderRadius = 24;
+      
+      // Draw background with rounded rectangle
+      // CSS: Colors background: rgba(0, 25, 4, 1)
+      ctx.fillStyle = "#001904";
+      ctx.beginPath();
+      ctx.roundRect(bgX, bgY, bgWidth, bgHeight, borderRadius);
+      ctx.fill();
+      
+      // Draw border: 0.5px with rgba(0, 255, 36, 0.2)
+      ctx.strokeStyle = "#00FF241A";
+      ctx.lineWidth = 0.5;
+      ctx.beginPath();
+      ctx.roundRect(bgX, bgY, bgWidth, bgHeight, borderRadius);
+      ctx.stroke();
       
       // Fill NOW text in white
-      ctx.fillStyle = "#FFFFFF";
-      ctx.fillText("NOW", nowLineX, 20);
+      ctx.fillStyle = "#00FF24";
+      ctx.fillText("now", nowLineX, textY);
+      
+      // Draw connecting line from top triangle to NOW box
+      // ctx.strokeStyle = "#00FF24";
+      // ctx.lineWidth = 1;
+      // ctx.beginPath();
+      // ctx.moveTo(nowLineX, triangleBottomY);
+      // ctx.lineTo(nowLineX, bgY);
+      // ctx.stroke();
+      
+      // Draw connecting line from NOW box to bottom triangle
+      const boxBottomY = bgY + bgHeight;
+      const arrowYBottom = boxBottomY+1; // Position below the NOW text box with spacing
+      
+      ctx.beginPath();
+      ctx.moveTo(nowLineX, boxBottomY);
+      ctx.lineTo(nowLineX, arrowYBottom);
+      ctx.stroke();
+      
+      // Draw downward-pointing triangle arrow below NOW text
+      
+      // Draw drop shadow for arrow
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+      ctx.shadowBlur = 1.45;
+      ctx.shadowColor = "rgba(0, 255, 36, 0.15)";
+      
+      // Draw the triangle (downward pointing)
+      ctx.beginPath();
+      ctx.moveTo(nowLineX, arrowYBottom); // Top point
+      ctx.lineTo(nowLineX - arrowSize, arrowYBottom + arrowSize); // Bottom left
+      ctx.lineTo(nowLineX + arrowSize, arrowYBottom + arrowSize); // Bottom right
+      ctx.closePath();
+      ctx.fillStyle = "#00FF24";
+      ctx.fill();
+      
+      // Reset shadow
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = "transparent";
 
       // Current price dot - positioned at the endpoint of the price line at NOW line
       const currentPriceDotY = h / 2 + priceOffset * pxPerPrice;
@@ -1461,8 +1805,19 @@ export default function TradingChart({
       ctx.font = "300 13px 'Geist Mono',monospace,monospace";
       ctx.textAlign = "center";
       for (let i = -Math.ceil(w / gridW) - 1; i < Math.ceil(w / gridW) + 2; i++) {
-        const x = centerX + i * gridW - offsetX;
-        const timeOffset = i * GRID_SEC;
+        const x = centerX + i * gridW - offsetX - GRID_SEC * pxPerSec;
+        const distanceFromNowLine = Math.abs(x - nowLineX);
+        const hideThreshold = 10; // Hide labels within 10px of NOW line
+        
+        // Skip labels that are too close to the left edge (where price labels are)
+        if (x < priceLabelAreaWidth) {
+          continue; // Skip drawing this label
+        }
+        
+        if (distanceFromNowLine < hideThreshold) {
+          continue; // Skip drawing this label
+        }
+        const timeOffset = i * GRID_SEC ;  // ADD GRID_SEC to shift labels 5 seconds left
         const tOffsetSec = timeOffset - (now % GRID_SEC);
         const tCell = now + tOffsetSec - timeOffsetRef.current;
         const secondsFromNow = Math.round(tCell - now);
@@ -1529,7 +1884,7 @@ export default function TradingChart({
           let isHoveredCell = false;
           if (currentHover) {
             // Calculate the hovered cell's position
-            const hoverCenterX = centerX + (currentHover.t - now) * pxPerSec;
+            const hoverCenterX = centerX + (currentHover.t - now) * pxPerSec - (GRID_SEC / 2) * pxPerSec;
             const hoverLeft = Math.round(hoverCenterX - gridW / 2);
             const basePriceForHover = Math.floor(price / priceStep) * priceStep;
             const hoverTop = Math.round(h / 2 - (basePriceForHover - price - priceOffset) * pxPerPrice + currentHover.gyIndex * gridH);
@@ -1573,15 +1928,24 @@ export default function TradingChart({
           
           // Get bet count for this grid
           const betCount = getCellBetCount(timeperiodId, priceLevel);
-          
-          // Check if this cell is selected (to skip drawing corner multiplier)
-          // MUST match the cellKey format used in getCellAtPosition()
+          //now the selcted cell is haig multipler but not adjacent cell
           const snappedCellTime = Math.floor(cellTime / GRID_SEC) * GRID_SEC + GRID_SEC / 2;
-          const cellKey = `${Math.round(snappedCellTime * 10)}_${priceLevel.toFixed(priceDecimals)}`;
-          const isSelectedCell = selectedCellsRef.current.has(cellKey);
+          // console.log('Snapped cell time:', snappedCellTime);
           
-          // Only draw corner multiplier if cell is NOT selected
-          // (Hover overlay will draw its own centered multiplier on top)
+          let isSelectedCell = false;
+          selectedCellsRef.current.forEach((selected) => {
+            // Snap the selected cell's absolute time using the same logic
+            const selectedSnappedTime = Math.floor(selected.t / GRID_SEC) * GRID_SEC + GRID_SEC / 2;
+            // console.log('Selected snapped time:', selectedSnappedTime);
+            
+            // Check if both the snapped time AND price level match exactly
+            // This works regardless of panning because we compare absolute times
+            if (Math.abs(selectedSnappedTime - snappedCellTime) < 0.01 && 
+                Math.abs(selected.priceLevel - priceLevel) < 0.01) {
+              isSelectedCell = true;
+            }
+          });
+          
           if (!isSelectedCell) {
             // Check if other users have bets on this grid - if so, show RED nextUserMultiplier
             // Try multiple gridId formats to match realtimeBets (which uses 2 decimals)
@@ -1726,37 +2090,72 @@ if (!otherUsersBets) {
               }
             }
             
-            // Draw multiplier (red if other users bet, white otherwise)
-            ctx.fillStyle = multiplierColor;
-            ctx.font = "10px 'Geist Mono',monospace";
-            ctx.textAlign = "left";
+            // Draw multiplier - Figma specs: Inter 900 italic 14px, centered, light gray
+            // Use light gray for normal multipliers, yellow for when other users have bet
+            const multiplierTextColor = multiplierColor === "#FFDA00" ? "#FFDA00" : "#B0B0B0";
+            
+            // Hide multiplier when too close to NOW line OR when in top row near time labels (unless panning)
+            // Calculate the x position where the time label would be drawn (same as time labels loop)
+            const timeLabelX = centerX + i * gridW - offsetX;
+            const distanceFromNowLine = Math.abs(timeLabelX - nowLineX);
+            const hideThreshold = 10; // Same threshold as time labels
+            
+            // Center the multiplier in the cell
+            const cellCenterX = cellX + gridW / 2;
+            const cellCenterY = cellY + gridH / 2;
+            
+            // Check if cell is too close to NOW line (near 0 seconds)
+            const isTooCloseToNowLine = Math.abs(cellCenterX - nowLineX) < hideThreshold;
+            
+            // Determine whether the time label is currently visible (not hidden near NOW)
+            const timeLabelIsVisible = distanceFromNowLine >= hideThreshold;
+            
+            // Cells whose center is near the time-label area (top ~30px where time labels are drawn)
+            const isNearTimeLabelBand = cellCenterY < 30;
+            
+            // Hide multiplier when:
+            // 1. Too close to NOW line (near 0 seconds), OR
+            // 2. Time label is visible AND cell is near top row
+            // But show all when panning
+            if ((isTooCloseToNowLine || (timeLabelIsVisible && isNearTimeLabelBand)) && !isPanning2DRef.current) {
+              // Skip drawing multiplier when too close to NOW line or time labels
+            } else {
+              // Draw multiplier when time label is NOT visible in the band OR when panning
+            ctx.fillStyle = multiplierTextColor;
+            
+            // Figma typography: Inter, 900 weight, italic, 14px, -5% letter spacing
+            // Canvas doesn't support letter-spacing directly, so we approximate with font styling
+            ctx.font = "900 italic 14px Inter, sans-serif";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
             
             // Add pulsing glow effect for yellow multiplier (#FFDA00)
             if (multiplierColor === "#FFDA00") {
               const pulseIntensity = (Math.sin(Date.now() / 500) + 1) / 2; // 0 to 1, ~1 second cycle
               const glowIntensity = 0.7 + (pulseIntensity * 0.3); // Pulse between 0.7 and 1.0 (very bright)
               // Draw multiple layers for stronger glow effect
-              ctx.shadowBlur = 50 * glowIntensity; // Much larger blur for visible glow
+              ctx.shadowBlur = 50 * glowIntensity;
               ctx.shadowColor = "#FFDA00";
-              // Draw the text multiple times with different blur levels for layered glow
-              ctx.fillText(`${displayMultiplier.toFixed(1)}X`, cellX + 4, cellY + 12);
+              ctx.fillText(`${displayMultiplier.toFixed(1)}X`, cellCenterX, cellCenterY);
               ctx.shadowBlur = 30 * glowIntensity;
-              ctx.fillText(`${displayMultiplier.toFixed(1)}X`, cellX + 4, cellY + 12);
+              ctx.fillText(`${displayMultiplier.toFixed(1)}X`, cellCenterX, cellCenterY);
               ctx.shadowBlur = 15 * glowIntensity;
-              ctx.fillText(`${displayMultiplier.toFixed(1)}X`, cellX + 4, cellY + 12);
+              ctx.fillText(`${displayMultiplier.toFixed(1)}X`, cellCenterX, cellCenterY);
               // Final draw without shadow for crisp text
               ctx.shadowBlur = 0;
               ctx.shadowColor = "transparent";
-              ctx.fillText(`${displayMultiplier.toFixed(1)}X`, cellX + 4, cellY + 12);
+              ctx.fillText(`${displayMultiplier.toFixed(1)}X`, cellCenterX, cellCenterY);
             } else {
-              ctx.shadowBlur = 0;
-              ctx.shadowColor = "transparent";
-              ctx.fillText(`${displayMultiplier.toFixed(1)}X`, cellX + 4, cellY + 12);
+              // Regular multiplier - no glow, just centered light gray text
+              ctx.fillText(`${displayMultiplier.toFixed(1)}X`, cellCenterX, cellCenterY);
             }
             
-            // Reset shadow after drawing
+            // Reset shadow and text alignment after drawing
             ctx.shadowBlur = 0;
             ctx.shadowColor = "transparent";
+            ctx.textAlign = "left";
+            ctx.textBaseline = "alphabetic";
+            }
           }
           
           // Draw bet count if > 1 (with user icon)
@@ -1781,7 +2180,7 @@ if (!otherUsersBets) {
 
       // Draw all selected cells with state-based colors
       selectedCellsRef.current.forEach((selected, cellKey) => {
-        const selCenterX = centerX + (selected.t - now) * pxPerSec + (timeOffsetRef.current * pxPerSec);
+        const selCenterX = centerX + (selected.t - now) * pxPerSec + (timeOffsetRef.current * pxPerSec) - (GRID_SEC / 2) * pxPerSec;
         const selLeft = Math.round(selCenterX - gridW / 2);
         const selRight = selLeft + gridW;
         const selTop = Math.round(h / 2 - (selected.priceLevel - price - priceOffset) * pxPerPrice);
@@ -1802,19 +2201,52 @@ if (!otherUsersBets) {
               return;
             }
             
-            // Stay at full opacity for 1 minute, then fade
+            // Stay at full opacity for visible duration, then fade
             const alpha = elapsed < visibleDuration ? 1 : 1 - ((elapsed - visibleDuration) / fadeDuration);
-            // Red state from Figma
-            ctx.fillStyle = `rgba(255, 94, 94, ${0.1 * alpha})`;
-            ctx.fillRect(selLeft, selTop, gridW, gridH);
+            
+            // Red lost state - continuous bright glow effect, no background color
+            // Continuous glow at maximum intensity (fades out over time)
+            // Add intense red glow effect (multiple layers for gaming look) at maximum intensity
+            // Layer 1: Outer glow (softest, largest) - continuous bright
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
+            ctx.shadowBlur = 30;
+            ctx.shadowColor = `rgba(255, 94, 94, ${0.6 * alpha})`;
+            ctx.strokeStyle = `rgba(255, 94, 94, ${0.2 * alpha})`;
+            ctx.lineWidth = 3;
+            ctx.strokeRect(selLeft, selTop, gridW, gridH);
+            
+            // Layer 2: Mid glow (medium intensity) - continuous bright
+            ctx.shadowBlur = 20;
+            ctx.shadowColor = `rgba(255, 94, 94, ${0.8 * alpha})`;
+            ctx.strokeStyle = `rgba(255, 94, 94, ${0.3 * alpha})`;
+            ctx.lineWidth = 2;
+            ctx.strokeRect(selLeft, selTop, gridW, gridH);
+            
+            // Layer 3: Inner glow (brightest, tightest) - continuous bright
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = `rgba(255, 94, 94, ${1.0 * alpha})`;
+            ctx.strokeStyle = `rgba(255, 94, 94, ${0.5 * alpha})`;
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(selLeft, selTop, gridW, gridH);
+            
+            // Draw main border (no fill, transparent background)
+            ctx.shadowBlur = 0;
+            ctx.shadowColor = "transparent";
             ctx.strokeStyle = `rgba(255, 94, 94, ${0.6 * alpha})`;
             ctx.lineWidth = 1;
             ctx.strokeRect(selLeft, selTop, gridW, gridH);
             
-            // Draw corner indicators with fade
-            const cornerSize = 5.5;
+            // Draw thick corner indicators (L-shaped) at all 4 corners with continuous glow
+            const cornerSize = 8; // Thicker corners
+            const cornerThickness = 2; // Thicker lines for corners
             ctx.strokeStyle = `rgba(255, 94, 94, ${alpha})`;
-            ctx.lineWidth = 1;
+            ctx.lineWidth = cornerThickness;
+            ctx.lineCap = "square";
+            
+            // Add continuous glow to corners
+            ctx.shadowBlur = 8;
+            ctx.shadowColor = `rgba(255, 94, 94, ${0.8 * alpha})`;
             
             // Top-left
             ctx.beginPath();
@@ -1844,59 +2276,31 @@ if (!otherUsersBets) {
             ctx.lineTo(selLeft + gridW, selTop + gridH - cornerSize);
             ctx.stroke();
             
-            // Draw multiplier and payout with fade
-            ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
-            ctx.textAlign = "center";
+            // Reset shadow
+            ctx.shadowBlur = 0;
+            ctx.shadowColor = "transparent";
             
-            // Show multiplier and payout if available
-            if (selected.multiplier && selected.payout) {
-              // Calculate all positions from rounded selTop to ensure integer pixels
-              const multiplierY = Math.round(selTop + gridH / 2 - 12);
-              const amountY = Math.round(selTop + gridH / 2 + 4);
-              
-              // Draw multiplier - match yellow cell font
-              ctx.font = "200 11px 'Geist Mono',monospace";
-              ctx.fillText(`${selected.multiplier.toFixed(2)}X`, selLeft + gridW / 2, multiplierY);
-              
-              // Draw payout amount - match yellow cell font
-              ctx.font = "300 14px 'Geist Mono',monospace";
-              ctx.fillText(`$${selected.payout.toFixed(2)}`, selLeft + gridW / 2, amountY);
+            // Draw only payout amount in center - Figma specs: Inter 900 italic 18px, red color
+            ctx.fillStyle = `rgba(255, 94, 94, ${alpha})`;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            
+            // Center the payout in the cell
+            const cellCenterX = selLeft + gridW / 2;
+            const cellCenterY = selTop + gridH / 2;
+            
+            // Show only payout if available
+            if (selected.payout) {
+              // Figma typography: Inter, 900 weight, italic, 18px
+              ctx.font = "900 italic 18px Inter, sans-serif";
+              ctx.fillText(`$${selected.payout.toFixed(2)}`, cellCenterX, cellCenterY);
             } else {
-              // Fallback
-              const amountY = Math.round(selTop + gridH / 2 + 4);
-              ctx.font = "600 12px 'Geist Mono',monospace";
-              ctx.fillText(`$${selected.priceLevel.toFixed(priceDecimals)}`, selLeft + gridW / 2, amountY);
+              // Fallback to price
+              ctx.font = "900 italic 16px Inter, sans-serif";
+              ctx.fillText(`$${selected.priceLevel.toFixed(priceDecimals)}`, cellCenterX, cellCenterY);
             }
             ctx.textAlign = "left";
-            
-            // Draw red bet count badge - match yellow badge styling
-            // Get actual bet count for this cell (include current user's bet + other users' bets)
-            const selectedTimeperiodId = Math.floor(selected.t / GRID_SEC) * GRID_SEC;
-            const otherUsersBetCount = getCellBetCount(selectedTimeperiodId, selected.priceLevel);
-            // Include current user's bet (1) if this cell is selected
-            const selectedBetCount = otherUsersBetCount + 1;
-            
-            const badgeRed = Math.round(selTop + gridH - 12);
-            const badgeY = Math.round(badgeRed - 2);
-            ctx.fillStyle = `rgba(255, 94, 94, ${alpha})`;
-            ctx.beginPath();
-            const badgeWidth = 30;
-            const badgeHeight = 11;
-            const badgeRadius = 12;
-            ctx.roundRect(Math.round(selLeft + gridW / 2 - badgeWidth / 2), badgeY, badgeWidth, badgeHeight, badgeRadius);
-            ctx.fill();
-            
-            const iconSize = 10;
-            const iconX = Math.round(selLeft + gridW / 2 - badgeWidth / 2 + 4);
-            const badgeCenterY = Math.round(badgeY + badgeHeight / 2);
-            const iconY = Math.round(badgeCenterY - iconSize / 2);
-            // Draw white icon for red badge
-            drawPersonIcon(ctx, iconX, iconY, iconSize, "#ffffff");
-            ctx.fillStyle = "#ffffff";
-            ctx.font = "10px 'Geist Mono',monospace";
-            ctx.textAlign = "left";
-            ctx.textBaseline = "middle";
-            ctx.fillText(`${selectedBetCount}`, iconX + iconSize + 2, badgeCenterY);
+            ctx.textBaseline = "alphabetic";
             
             return;
           }
@@ -1947,17 +2351,48 @@ if (!otherUsersBets) {
               break;
               
             case 'confirmed': {
-              // Yellow color for confirmed orders (from Figma)
-              ctx.fillStyle = "rgba(255, 218, 0, 0.1)";
-              ctx.fillRect(selLeft, selTop, gridW, gridH);
+              // Yellow confirmed orders - continuous bright glow effect, no background color
+              // Add intense yellow glow effect (multiple layers for gaming look) at maximum intensity
+              // Layer 1: Outer glow (softest, largest) - continuous bright
+              ctx.shadowOffsetX = 0;
+              ctx.shadowOffsetY = 0;
+              ctx.shadowBlur = 30;
+              ctx.shadowColor = "rgba(255, 218, 0, 0.6)";
+              ctx.strokeStyle = "rgba(255, 218, 0, 0.2)";
+              ctx.lineWidth = 3;
+              ctx.strokeRect(selLeft, selTop, gridW, gridH);
+              
+              // Layer 2: Mid glow (medium intensity) - continuous bright
+              ctx.shadowBlur = 20;
+              ctx.shadowColor = "rgba(255, 218, 0, 0.8)";
+              ctx.strokeStyle = "rgba(255, 218, 0, 0.3)";
+              ctx.lineWidth = 2;
+              ctx.strokeRect(selLeft, selTop, gridW, gridH);
+              
+              // Layer 3: Inner glow (brightest, tightest) - continuous bright
+              ctx.shadowBlur = 15;
+              ctx.shadowColor = "rgba(255, 218, 0, 1.0)";
+              ctx.strokeStyle = "rgba(255, 218, 0, 0.5)";
+              ctx.lineWidth = 1.5;
+              ctx.strokeRect(selLeft, selTop, gridW, gridH);
+              
+              // Draw main border (no fill, transparent background)
+              ctx.shadowBlur = 0;
+              ctx.shadowColor = "transparent";
               ctx.strokeStyle = "rgba(255, 218, 0, 0.6)";
               ctx.lineWidth = 1;
               ctx.strokeRect(selLeft, selTop, gridW, gridH);
               
-              // Draw corner indicators
-              const cornerSize = 5.5;
+              // Draw thick corner indicators (L-shaped) at all 4 corners with continuous glow
+              const cornerSize = 8; // Thicker corners
+              const cornerThickness = 2; // Thicker lines for corners
               ctx.strokeStyle = "#FFDA00";
-              ctx.lineWidth = 1;
+              ctx.lineWidth = cornerThickness;
+              ctx.lineCap = "square";
+              
+              // Add continuous glow to corners
+              ctx.shadowBlur = 8;
+              ctx.shadowColor = "rgba(255, 218, 0, 0.8)";
               
               // Top-left
               ctx.beginPath();
@@ -1987,109 +2422,79 @@ if (!otherUsersBets) {
               ctx.lineTo(selLeft + gridW, selTop + gridH - cornerSize);
               ctx.stroke();
               
-              // Draw multiplier and payout in center
-              ctx.fillStyle = "#fff";
-              ctx.textAlign = "center";
+              // Reset shadow
+              ctx.shadowBlur = 0;
+              ctx.shadowColor = "transparent";
               
-              // Show multiplier and payout if available
-              if (selected.multiplier && selected.payout) {
-                // Calculate all positions from rounded selTop to ensure integer pixels
-                const multiplierY = Math.round(selTop + gridH / 2 - 12);
-                const amountY = Math.round(selTop + gridH / 2 + 4);
-                
-                // Draw current user multiplier (white, larger, bold)
-                ctx.font = "200 11px 'Geist Mono',monospace";
-                ctx.fillText(`${selected.multiplier.toFixed(2)}X`, selLeft + gridW / 2, multiplierY);
-                
-                // Draw payout amount - positioned to create equal spacing with multiplier and badge
-                ctx.font = "300 14px 'Geist Mono',monospace";
-                ctx.fillText(`$${selected.payout.toFixed(2)}`, selLeft + gridW / 2, amountY);
-                
-                // Draw next user's multiplier (RED) below - REAL value after confirmation
-                if (selected.nextUserMultiplier) {
-                  // console.log(`>>> DRAWING REAL RED MULTIPLIER: ${selected.nextUserMultiplier.toFixed(2)}X`);
-                  ctx.fillStyle = "#FF4444";
-                  ctx.font = "bold 12px 'Geist Mono',monospace";  // Bigger and bold
-                  // ctx.fillText(`Next: ${selected.nextUserMultiplier.toFixed(2)}X`, selLeft + gridW / 2, selTop + gridH / 2 + 22);
-                } else {
-                //   // Still loading
-                // //   ctx.fillStyle = "#888888";
-                // //   ctx.font = "200 8px 'Geist Mono',monospace";
-                // //   ctx.fillText(`Next: loading...`, selLeft + gridW / 2, selTop + gridH / 2 + 22);
-                }
+              // Draw only payout amount in center - Figma specs: Inter 900 italic 18px, yellow color
+              ctx.fillStyle = "#FFDA00";
+              ctx.textAlign = "center";
+              ctx.textBaseline = "middle";
+              
+              // Center the payout in the cell
+              const cellCenterX = selLeft + gridW / 2;
+              const cellCenterY = selTop + gridH / 2;
+              
+              // Show only payout if available
+              if (selected.payout) {
+                // Figma typography: Inter, 900 weight, italic, 18px
+                ctx.font = "900 italic 16px Inter, sans-serif";
+                ctx.fillText(`$${selected.payout.toFixed(2)}`, cellCenterX, cellCenterY);
               } else {
                 // Fallback to price
-                const amountY = Math.round(selTop + gridH / 2 + 4);
-                ctx.font = "600 12px 'Geist Mono',monospace";
-                ctx.fillText(`$${selected.priceLevel.toFixed(priceDecimals)}`, selLeft + gridW / 2, amountY);
+                ctx.font = "900 italic 16px Inter, sans-serif";
+                ctx.fillText(`$${selected.priceLevel.toFixed(priceDecimals)}`, cellCenterX, cellCenterY);
               }
               ctx.textAlign = "left";
-              
-              // Draw yellow bet count badge at bottom with proper spacing from text
-              // Get actual bet count for this cell (include current user's bet + other users' bets)
-              const selectedTimeperiodId = Math.floor(selected.t / GRID_SEC) * GRID_SEC;
-              const otherUsersBetCount = getCellBetCount(selectedTimeperiodId, selected.priceLevel);
-              // Include current user's bet (1) if this cell is selected
-              const selectedBetCount = otherUsersBetCount + 1;
-              
-              // Calculate badge position from rounded selTop and round it
-              const badgeYellow = Math.round(selTop + gridH - 12);
-              const badgeY = Math.round(badgeYellow - 2);
-              ctx.fillStyle = "#FFDA00";
-              ctx.beginPath();
-              const badgeWidth = 30;
-              const badgeHeight = 11;
-              const badgeRadius = 12; // Canvas will clamp this to height/2
-              ctx.roundRect(Math.round(selLeft + gridW / 2 - badgeWidth / 2), badgeY, badgeWidth, badgeHeight, badgeRadius);
-              ctx.fill();
-              
-              ctx.fillStyle = "#0b0b0b";
-              const iconSize = 10;
-              const iconX = Math.round(selLeft + gridW / 2 - badgeWidth / 2 + 4);
-              const badgeCenterY = Math.round(badgeY + badgeHeight / 2);
-              const iconY = Math.round(badgeCenterY - iconSize / 2);
-              drawPersonIcon(ctx, iconX, iconY, iconSize);
-              ctx.font = "10px 'Geist Mono',monospace";
-              ctx.textAlign = "left";
-              ctx.textBaseline = "middle";
-              ctx.fillText(`${selectedBetCount}`, iconX + iconSize + 2, badgeCenterY);
+              ctx.textBaseline = "alphabetic";
               break;
             }
               
             case 'won': {
-              const elapsedWin = now * 1000- selected.timestamp;
-              const pulseDuration = 3000; // 2 second pulse animation
-              const pulseProgress = Math.min(elapsedWin / pulseDuration, 1);
+              const elapsedWin = now * 1000 - selected.timestamp;
               
-              // Draw expanding green pulse rings
-              const maxPulseRadius = gridW * 1.5;
-              const numPulses = 3;
-              for (let p = 0; p < numPulses; p++) {
-                const pulseDelay = p * 200; // Stagger pulses
-                const pulseElapsed = elapsedWin - pulseDelay;
-                if (pulseElapsed > 0 && pulseElapsed < pulseDuration) {
-                  const pulseAlpha = 1 - (pulseElapsed / pulseDuration);
-                  const pulseRadius = (pulseElapsed / pulseDuration) * maxPulseRadius;
-                  
-                  ctx.strokeStyle = `rgba(0, 255, 36, ${0.4 * pulseAlpha})`;
-                  ctx.lineWidth = 2;
-                  ctx.beginPath();
-                  ctx.arc(selLeft + gridW / 2, selTop + gridH / 2, pulseRadius, 0, Math.PI * 2);
-                  ctx.stroke();
-                }
-              }
+              // Green won state - continuous bright glow effect, no background color
+              // Add intense green glow effect (multiple layers for gaming look) at maximum intensity
+              // Layer 1: Outer glow (softest, largest) - continuous bright
+              ctx.shadowOffsetX = 0;
+              ctx.shadowOffsetY = 0;
+              ctx.shadowBlur = 30;
+              ctx.shadowColor = "rgba(0, 255, 36, 0.6)";
+              ctx.strokeStyle = "rgba(0, 255, 36, 0.2)";
+              ctx.lineWidth = 3;
+              ctx.strokeRect(selLeft, selTop, gridW, gridH);
               
-              // Green profit state from Figma
-              ctx.fillStyle = "rgba(0, 255, 36, 0.3)";
-              ctx.fillRect(selLeft, selTop, gridW, gridH);
+              // Layer 2: Mid glow (medium intensity) - continuous bright
+              ctx.shadowBlur = 20;
+              ctx.shadowColor = "rgba(0, 255, 36, 0.8)";
               ctx.strokeStyle = "rgba(0, 255, 36, 0.3)";
+                  ctx.lineWidth = 2;
+              ctx.strokeRect(selLeft, selTop, gridW, gridH);
+              
+              // Layer 3: Inner glow (brightest, tightest) - continuous bright
+              ctx.shadowBlur = 15;
+              ctx.shadowColor = "rgba(0, 255, 36, 1.0)";
+              ctx.strokeStyle = "rgba(0, 255, 36, 0.5)";
+              ctx.lineWidth = 1.5;
+              ctx.strokeRect(selLeft, selTop, gridW, gridH);
+              
+              // Draw main border (no fill, transparent background)
+              ctx.shadowBlur = 0;
+              ctx.shadowColor = "transparent";
+              ctx.strokeStyle = "rgba(0, 255, 36, 0.6)";
               ctx.lineWidth = 1;
               ctx.strokeRect(selLeft, selTop, gridW, gridH);
               
-              // Draw corner indicators
-              const cornerSizeWon = 5.5;
+              // Draw thick corner indicators (L-shaped) at all 4 corners with continuous glow
+              const cornerSizeWon = 8; // Thicker corners
+              const cornerThickness = 2; // Thicker lines for corners
               ctx.strokeStyle = "#00ff24";
-              ctx.lineWidth = 1;
+              ctx.lineWidth = cornerThickness;
+              ctx.lineCap = "square";
+              
+              // Add continuous glow to corners
+              ctx.shadowBlur = 8;
+              ctx.shadowColor = "rgba(0, 255, 36, 0.8)";
               
               // Top-left
               ctx.beginPath();
@@ -2119,29 +2524,32 @@ if (!otherUsersBets) {
               ctx.lineTo(selLeft + gridW, selTop + gridH - cornerSizeWon);
               ctx.stroke();
               
-              // Draw multiplier and price/payout in green
-              ctx.fillStyle = "#76ff5e";
-              ctx.textAlign = "center";
+              // Reset shadow
+              ctx.shadowBlur = 0;
+              ctx.shadowColor = "transparent";
               
-              // Show multiplier and payout if available
-              if (selected.multiplier && selected.payout) {
-                // Calculate all positions from rounded selTop to ensure integer pixels
-                const multiplierY = Math.round(selTop + gridH / 2 - 12);
-                const amountY = Math.round(selTop + gridH / 2 + 4);
-                
-                // Draw multiplier - match yellow cell font
-                ctx.font = "200 11px 'Geist Mono',monospace";
-                ctx.fillText(`${selected.multiplier.toFixed(2)}X`, selLeft + gridW / 2, multiplierY+4);
-                
-                // Draw payout amount - match yellow cell font
-                ctx.font = "300 14px 'Geist Mono',monospace";
-                ctx.fillText(`$${selected.payout.toFixed(2)}`, selLeft + gridW / 2, amountY+9);
+              // Draw only payout amount in center - Figma specs: Inter 900 italic 18px, green color
+              ctx.fillStyle = "#00ff24";
+              ctx.textAlign = "center";
+              ctx.textBaseline = "middle";
+              
+              // Center the payout in the cell
+              const cellCenterX = selLeft + gridW / 2;
+              const cellCenterY = selTop + gridH / 2;
+              
+              // Show only payout if available
+              if (selected.payout) {
+                // Figma typography: Inter, 900 weight, italic, 18px
+                ctx.font = "900 italic 16px Inter, sans-serif";
+                ctx.fillText(`$${selected.payout.toFixed(2)}`, cellCenterX, cellCenterY);
               } else {
-                // Fallback
-                const amountY = Math.round(selTop + gridH / 2 + 4);
-                ctx.font = "600 12px 'Geist Mono',monospace";
-                ctx.fillText(`$${selected.priceLevel.toFixed(priceDecimals)}`, selLeft + gridW / 2, amountY);
+                // Fallback to price
+                ctx.font = "900 italic 16px Inter, sans-serif";
+                ctx.fillText(`$${selected.priceLevel.toFixed(priceDecimals)}`, cellCenterX, cellCenterY);
               }
+              
+              ctx.textAlign = "left";
+              ctx.textBaseline = "alphabetic";
               
               // Draw sliding payout text (powerup style)
               const payoutDuration = 2000; // 1.5 seconds
@@ -2238,7 +2646,7 @@ if (!otherUsersBets) {
           // Calculate cell position - use the CENTER of the 5-second period
           // timeperiodId is the START of the period, so add 2.5 to get center
           const cellTime = timeperiodId + 2.5;
-          const selCenterX = centerX + (cellTime - now) * pxPerSec + (timeOffsetRef.current * pxPerSec);
+          const selCenterX = centerX + (cellTime - now) * pxPerSec + (timeOffsetRef.current * pxPerSec) - (GRID_SEC / 2) * pxPerSec;
           const selLeft = Math.round(selCenterX - gridW / 2);
           
           // Calculate Y position - align with grid lines
@@ -2296,7 +2704,7 @@ if (!otherUsersBets) {
       const hover = hoverRef.current;
       if (hover && !isDraggingRef.current && !isPanning2DRef.current) {
         // Use the same calculation as selected cells to ensure alignment
-        const hoverCenterX = centerX + (hover.t - now) * pxPerSec;
+        const hoverCenterX = centerX + (hover.t - now) * pxPerSec - (GRID_SEC / 2) * pxPerSec;
         const hoverLeft = Math.round(hoverCenterX - gridW / 2);
         const basePriceHover = Math.floor(price / priceStep) * priceStep;
         const hoverTop = Math.round(h / 2 - (basePriceHover - price - priceOffset) * pxPerPrice + hover.gyIndex * gridH);
@@ -2305,47 +2713,222 @@ if (!otherUsersBets) {
         const isSelected = selectedCellsRef.current.has(cellKey);
 
         if (hoverLeft + gridW >= 0 && hoverLeft <= w && hoverTop + gridH >= 0 && hoverTop <= h && !isSelected) {
-          // White hover state background
-          ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
-          ctx.fillRect(hoverLeft, hoverTop, gridW, gridH);
+          // Draw circular glow effect on grid lines around hovered cell
+          const cellCenterX = hoverLeft + gridW / 2;
+          const cellCenterY = hoverTop + gridH / 2;
           
-          // White border
-          ctx.strokeStyle = "rgba(217, 217, 217, 0.1)";
+          // Reduced radius - about 1.0 cells (shorter lines)
+          const glowRadius = 1.0 * Math.max(gridW, gridH);
+          const fadeLength = 0.3 * Math.max(gridW, gridH); // Length of fade at line ends
+          
+          ctx.save();
+          
+          // Draw circular glow on horizontal grid lines (price lines) around hovered cell
+          // Include the hovered cell's own borders (no skip for i === 0)
+          for (let i = -2; i <= 2; i++) {
+            const glowPriceLevel = priceLevel + (i * priceStep);
+            const glowY = h / 2 - (glowPriceLevel - price - priceOffset) * pxPerPrice;
+            
+            // Calculate distance from cell center (circular distance)
+            const dy = Math.abs(glowY - cellCenterY);
+            const distanceFromCenter = Math.sqrt(dy * dy);
+            
+            // Only glow if within the circular radius
+            if (distanceFromCenter <= glowRadius && glowY >= 0 && glowY <= h) {
+              // Calculate glow intensity based on distance (circular falloff)
+              const glowIntensity = Math.max(0, (1 - (distanceFromCenter / glowRadius)) * 0.3); // Max 30% opacity (subtle)
+              
+              if (glowIntensity > 0.05) {
+                // Only draw the portion of the line within the circular radius
+                // Calculate intersection points with the circular radius
+                const dx = Math.sqrt(Math.max(0, glowRadius * glowRadius - dy * dy));
+                let glowStartX = Math.max(priceLabelAreaWidth, cellCenterX - dx);
+                let glowEndX = Math.min(w, cellCenterX + dx);
+                
+                // Add fade at the ends (reduce line length slightly)
+                const lineLength = glowEndX - glowStartX;
+                if (lineLength > fadeLength * 2) {
+                  glowStartX += fadeLength;
+                  glowEndX -= fadeLength;
+                }
+                
+                // Create gradient for fade effect at line ends
+                const gradient = ctx.createLinearGradient(glowStartX, glowY, glowEndX, glowY);
+                const baseOpacity = 0.15 + glowIntensity * 0.15; // 15-30% opacity
+                gradient.addColorStop(0, `rgba(255, 255, 255, 0)`); // Fade at start
+                gradient.addColorStop(0.2, `rgba(255, 255, 255, ${baseOpacity * 0.5})`); // Fade in
+                gradient.addColorStop(0.5, `rgba(255, 255, 255, ${baseOpacity})`); // Full in middle
+                gradient.addColorStop(0.8, `rgba(255, 255, 255, ${baseOpacity * 0.5})`); // Fade out
+                gradient.addColorStop(1, `rgba(255, 255, 255, 0)`); // Fade at end
+                
+                // Apply subtle circular glow effect
+                ctx.shadowBlur = 6 * glowIntensity; // Reduced shadow
+                ctx.shadowColor = "rgba(255, 255, 255, 0.2)"; // Subtle shadow
+                ctx.strokeStyle = gradient;
+              ctx.lineWidth = 1;
+              ctx.beginPath();
+              ctx.moveTo(glowStartX, glowY);
+              ctx.lineTo(glowEndX, glowY);
+              ctx.stroke();
+              }
+            }
+          }
+          
+          // Draw circular glow on vertical grid lines (time lines) around hovered cell
+          // Include the hovered cell's own borders (no skip for i === 0)
+          // Use the same calculation as the actual grid lines for perfect alignment
+          const baseOffsetX = (now % GRID_SEC) * pxPerSec;
+          const offsetX = baseOffsetX - (timeOffsetRef.current % GRID_SEC) * pxPerSec - (GRID_SEC / 2) * pxPerSec;
+          
+          // Calculate the grid index for the hovered cell's center
+          // Grid lines use: x = centerX + i * gridW - offsetX
+          // So: i = (x - centerX + offsetX) / gridW
+          const hoverGridIndex = Math.round((cellCenterX - centerX + offsetX) / gridW);
+          
+          for (let i = -2; i <= 2; i++) {
+            // Use the same formula as the grid lines: centerX + i * gridW - offsetX
+            const gridIndex = hoverGridIndex + i;
+            const glowX = centerX + gridIndex * gridW - offsetX;
+            
+            // Only draw if within the price label area boundary
+            if (glowX >= priceLabelAreaWidth && glowX <= w) {
+              // Calculate distance from cell center (circular distance)
+              const dx = Math.abs(glowX - cellCenterX);
+              const distanceFromCenter = Math.sqrt(dx * dx);
+              
+              // Only glow if within the circular radius
+              if (distanceFromCenter <= glowRadius) {
+                // Calculate glow intensity based on distance (circular falloff)
+                const glowIntensity = Math.max(0, (1 - (distanceFromCenter / glowRadius)) * 0.3); // Max 30% opacity (subtle)
+                
+                if (glowIntensity > 0.05) {
+                  // Only draw the portion of the line within the circular radius
+                  // Calculate intersection points with the circular radius
+                  const dy = Math.sqrt(Math.max(0, glowRadius * glowRadius - dx * dx));
+                  let glowStartY = Math.max(0, cellCenterY - dy);
+                  let glowEndY = Math.min(h, cellCenterY + dy);
+                  
+                  // Add fade at the ends (reduce line length slightly)
+                  const lineLength = glowEndY - glowStartY;
+                  if (lineLength > fadeLength * 2) {
+                    glowStartY += fadeLength;
+                    glowEndY -= fadeLength;
+                  }
+                  
+                  // Create gradient for fade effect at line ends
+                  const gradient = ctx.createLinearGradient(glowX, glowStartY, glowX, glowEndY);
+                  const baseOpacity = 0.15 + glowIntensity * 0.15; // 15-30% opacity
+                  gradient.addColorStop(0, `rgba(255, 255, 255, 0)`); // Fade at start
+                  gradient.addColorStop(0.2, `rgba(255, 255, 255, ${baseOpacity * 0.5})`); // Fade in
+                  gradient.addColorStop(0.5, `rgba(255, 255, 255, ${baseOpacity})`); // Full in middle
+                  gradient.addColorStop(0.8, `rgba(255, 255, 255, ${baseOpacity * 0.5})`); // Fade out
+                  gradient.addColorStop(1, `rgba(255, 255, 255, 0)`); // Fade at end
+                  
+                  // Apply subtle circular glow effect
+                  ctx.shadowBlur = 6 * glowIntensity; // Reduced shadow
+                  ctx.shadowColor = "rgba(255, 255, 255, 0.2)"; // Subtle shadow
+                  ctx.strokeStyle = gradient;
+              ctx.lineWidth = 1;
+              ctx.beginPath();
+              ctx.moveTo(glowX, glowStartY);
+              ctx.lineTo(glowX, glowEndY);
+              ctx.stroke();
+                }
+              }
+            }
+          }
+          
+          // Reset shadow
+          ctx.shadowBlur = 0;
+          ctx.shadowColor = "transparent";
+          ctx.restore();
+          
+          // Gaming-style hover state: transparent background with white border, drop shadow, and intense white glow
+          // Border: 1px solid rgba(217, 217, 217, 0.3) - from Figma
+          // Drop shadow: 0px 0px 14.4px rgba(224, 224, 224, 1) - from Figma
+          // Intense white glow for gaming look
+          
+          // Draw intense white glow effect (multiple layers for stronger gaming glow)
+          // Layer 1: Outer glow (softest, largest)
+          ctx.shadowOffsetX = 0;
+          ctx.shadowOffsetY = 0;
+          ctx.shadowBlur = 30;
+          ctx.shadowColor = "rgba(255, 255, 255, 0.6)";
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+          ctx.lineWidth = 3;
+          ctx.strokeRect(hoverLeft, hoverTop, gridW, gridH);
+          
+          // Layer 2: Mid glow (medium intensity)
+          ctx.shadowBlur = 20;
+          ctx.shadowColor = "rgba(255, 255, 255, 0.8)";
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(hoverLeft, hoverTop, gridW, gridH);
+          
+          // Layer 3: Inner glow (brightest, tightest)
+          ctx.shadowBlur = 15;
+          ctx.shadowColor = "rgba(255, 255, 255, 1.0)";
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(hoverLeft, hoverTop, gridW, gridH);
+          
+          // Draw drop shadow
+          ctx.shadowBlur = 14.4;
+          ctx.shadowColor = "rgba(224, 224, 224, 1)";
+          
+          // Draw main border
+          ctx.strokeStyle = "rgba(217, 217, 217, 0.3)";
           ctx.lineWidth = 1;
           ctx.strokeRect(hoverLeft, hoverTop, gridW, gridH);
           
-          // Draw corner indicators (small L shapes)
-          const cornerSize = 5.5;
-          ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
-          ctx.lineWidth = 1;
+          // Reset shadow
+          ctx.shadowOffsetX = 0;
+          ctx.shadowOffsetY = 0;
+          ctx.shadowBlur = 0;
+          ctx.shadowColor = "transparent";
           
-          // Top-left corner
+          // Draw thick corner indicators (L-shaped) at all 4 corners with glow
+          const cornerSize = 8; // Thicker corners
+          const cornerThickness = 2; // Thicker lines for corners
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.9)"; // Bright white for corners
+          ctx.lineWidth = cornerThickness;
+          ctx.lineCap = "square";
+          
+          // Add glow to corners
+          ctx.shadowBlur = 8;
+          ctx.shadowColor = "rgba(255, 255, 255, 0.8)";
+          
+          // Top-left corner (L shape pointing down-right)
           ctx.beginPath();
           ctx.moveTo(hoverLeft, hoverTop + cornerSize);
           ctx.lineTo(hoverLeft, hoverTop);
           ctx.lineTo(hoverLeft + cornerSize, hoverTop);
           ctx.stroke();
           
-          // Top-right corner
+          // Top-right corner (L shape pointing down-left)
           ctx.beginPath();
           ctx.moveTo(hoverLeft + gridW - cornerSize, hoverTop);
           ctx.lineTo(hoverLeft + gridW, hoverTop);
           ctx.lineTo(hoverLeft + gridW, hoverTop + cornerSize);
           ctx.stroke();
           
-          // Bottom-left corner
+          // Bottom-left corner (L shape pointing up-right)
           ctx.beginPath();
           ctx.moveTo(hoverLeft, hoverTop + gridH - cornerSize);
           ctx.lineTo(hoverLeft, hoverTop + gridH);
           ctx.lineTo(hoverLeft + cornerSize, hoverTop + gridH);
           ctx.stroke();
           
-          // Bottom-right corner
+          // Bottom-right corner (L shape pointing up-left)
           ctx.beginPath();
           ctx.moveTo(hoverLeft + gridW - cornerSize, hoverTop + gridH);
           ctx.lineTo(hoverLeft + gridW, hoverTop + gridH);
           ctx.lineTo(hoverLeft + gridW, hoverTop + gridH - cornerSize);
           ctx.stroke();
+          
+          // Reset shadow after drawing corners
+          ctx.shadowBlur = 0;
+          ctx.shadowColor = "transparent";
           
           // Get user's bet amount from localStorage
           const savedAmount = typeof window !== 'undefined' ? localStorage.getItem('userAmount') : null;
@@ -2422,120 +3005,50 @@ if (!otherUsersBets) {
   ? otherUsersBets.length 
   : getCellBetCount(hoverTimeperiodId, priceLevel);
           
-          // Draw multiplier and payout - centered like yellow cell, but RED if other users bet
+          // Draw total payout (multiplier × selected amount) - Figma specs: Inter 900 italic 18px, centered, bright white
+          // Use bright white for normal payouts, yellow for when other users have bet
+          const hoverPayoutTextColor = multiplierColor === "#FFDA00" ? "#FFDA00" : "#FFFFFF";
+          ctx.fillStyle = hoverPayoutTextColor;
+          
+          // Figma typography: Inter, 900 weight, italic, 18px, -5% letter spacing
+          ctx.font = "900 italic 16px Inter, sans-serif";
           ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
           
-          // Calculate positions exactly like yellow cell
-          const multiplierY = Math.round(hoverTop + gridH / 2 - 12);
-          const amountY = Math.round(hoverTop + gridH / 2 + 4);
+          // Center the payout amount in the hover cell
+          const hoverCellCenterX = hoverLeft + gridW / 2;
+          const hoverCellCenterY = hoverTop + gridH / 2;
           
-          // Draw multiplier - RED if other users bet, white otherwise
-          ctx.fillStyle = multiplierColor;
-          ctx.font = "200 11px 'Geist Mono',monospace";
+          // Format payout text
+          const payoutText = `$${hoverPayout.toFixed(2)}`;
           
-          // Add pulsing glow effect for yellow multiplier (#FFDA00)
+          // Add pulsing glow effect for yellow payout (#FFDA00)
           if (multiplierColor === "#FFDA00") {
             const pulseIntensity = (Math.sin(Date.now() / 500) + 1) / 2; // 0 to 1, ~1 second cycle
             const glowIntensity = 0.7 + (pulseIntensity * 0.3); // Pulse between 0.7 and 1.0 (very bright)
             // Draw multiple layers for stronger glow effect
-            ctx.shadowBlur = 60 * glowIntensity; // Much larger blur for visible glow
+            ctx.shadowBlur = 60 * glowIntensity;
             ctx.shadowColor = "#FFDA00";
-            // Draw the text multiple times with different blur levels for layered glow
-            ctx.fillText(`${hoverMultiplier.toFixed(1)}X`, hoverLeft + gridW / 2, multiplierY);
+            ctx.fillText(payoutText, hoverCellCenterX, hoverCellCenterY);
             ctx.shadowBlur = 40 * glowIntensity;
-            ctx.fillText(`${hoverMultiplier.toFixed(1)}X`, hoverLeft + gridW / 2, multiplierY);
+            ctx.fillText(payoutText, hoverCellCenterX, hoverCellCenterY);
             ctx.shadowBlur = 20 * glowIntensity;
-            ctx.fillText(`${hoverMultiplier.toFixed(1)}X`, hoverLeft + gridW / 2, multiplierY);
+            ctx.fillText(payoutText, hoverCellCenterX, hoverCellCenterY);
             // Final draw without shadow for crisp text
             ctx.shadowBlur = 0;
             ctx.shadowColor = "transparent";
-            ctx.fillText(`${hoverMultiplier.toFixed(1)}X`, hoverLeft + gridW / 2, multiplierY);
+            ctx.fillText(payoutText, hoverCellCenterX, hoverCellCenterY);
           } else {
-            ctx.shadowBlur = 0;
-            ctx.shadowColor = "transparent";
-            ctx.fillText(`${hoverMultiplier.toFixed(1)}X`, hoverLeft + gridW / 2, multiplierY);
+            // Regular payout - no glow, just centered light gray text
+            ctx.fillText(payoutText, hoverCellCenterX, hoverCellCenterY);
           }
           
-          // Reset shadow after drawing
+          // Reset shadow and text alignment after drawing
           ctx.shadowBlur = 0;
           ctx.shadowColor = "transparent";
-          
-          // Draw payout amount - white
-          ctx.fillStyle = "#fff";
-          ctx.font = "300 14px 'Geist Mono',monospace";
-          ctx.fillText(`$${hoverPayout.toFixed(2)}`, hoverLeft + gridW / 2, amountY);
-          
-          ctx.textAlign = "left";
-          
-          // Draw bet count badge at bottom - match yellow badge styling exactly but in black/white
-          // Always show badge if there are bets, or show 0 if no bets
-          const badgeWhite = Math.round(hoverTop + gridH - 12);
-          const badgeY = Math.round(badgeWhite - 2);
-          ctx.fillStyle = "#ffffff"; // White badge instead of yellow
-          ctx.beginPath();
-          const badgeWidth = 30; // Same as yellow
-          const badgeHeight = 11; // Same as yellow
-          const badgeRadius = 12; // Same as yellow
-          ctx.roundRect(Math.round(hoverLeft + gridW / 2 - badgeWidth / 2), badgeY, badgeWidth, badgeHeight, badgeRadius);
-          ctx.fill();
-          
-          // Black icon and text on white badge (same as yellow cell but inverted colors)
-          const iconSize = 10; // Same as yellow
-          const iconX = Math.round(hoverLeft + gridW / 2 - badgeWidth / 2 + 4); // Same spacing
-          const badgeCenterY = Math.round(badgeY + badgeHeight / 2);
-          const iconY = Math.round(badgeCenterY - iconSize / 2);
-          drawPersonIcon(ctx, iconX, iconY, iconSize, "#0b0b0b"); // Black icon on white badge
-          ctx.fillStyle = "#0b0b0b"; // Black text on white badge
-          ctx.font = "10px 'Geist Mono',monospace"; // Same font as yellow
-          ctx.textAlign = "left";
-          ctx.textBaseline = "middle";
-          ctx.fillText(`${hoverBetCount}`, iconX + iconSize + 2, badgeCenterY);
-          
-          // Reset text properties
           ctx.textAlign = "left";
           ctx.textBaseline = "alphabetic";
         }
-      }
-
-      // Shadow gradient from NOW line to the right (future) - drawn LAST to overlay everything
-      // Very minimal for first 20 seconds, then gradually increases darkness
-      const twentySecondsX = nowLineX + (20 * pxPerSec);
-      const gradientEndX = w; // Extend to right edge of canvas
-      
-      // Only draw gradient if it extends beyond the NOW line
-      if (gradientEndX > nowLineX) {
-        const shadowGradient = ctx.createLinearGradient(nowLineX, 0, gradientEndX, 0);
-        
-        // Start completely transparent at NOW line
-        shadowGradient.addColorStop(0, 'rgba(0, 0, 0, 0)');
-        
-        // Very minimal darkness at 20 seconds (about 15% opacity - visible but subtle)
-        const twentySecondsProgress = (twentySecondsX - nowLineX) / (gradientEndX - nowLineX);
-        if (twentySecondsProgress < 1) {
-          shadowGradient.addColorStop(twentySecondsProgress, 'rgba(0, 0, 0, 0.15)');
-        }
-        
-        // Gradually increase darkness after 20 seconds
-        // At 50 seconds: ~35% opacity
-        const fiftySecondsX = nowLineX + (50 * pxPerSec);
-        const fiftySecondsProgress = Math.min((fiftySecondsX - nowLineX) / (gradientEndX - nowLineX), 1);
-        if (fiftySecondsProgress > twentySecondsProgress && fiftySecondsProgress < 1) {
-          shadowGradient.addColorStop(fiftySecondsProgress, 'rgba(0, 0, 0, 0.35)');
-        }
-        
-        // At 110 seconds: ~55% opacity
-        const oneTenSecondsX = nowLineX + (110 * pxPerSec);
-        const oneTenSecondsProgress = Math.min((oneTenSecondsX - nowLineX) / (gradientEndX - nowLineX), 1);
-        if (oneTenSecondsProgress > fiftySecondsProgress && oneTenSecondsProgress < 1) {
-          shadowGradient.addColorStop(oneTenSecondsProgress, 'rgba(0, 0, 0, 0.55)');
-        }
-        
-        // Maximum darkness at the end: ~75% opacity - creates visible darkening effect
-        shadowGradient.addColorStop(1, 'rgba(0, 0, 0, 0.75)');
-        
-        // Draw the gradient overlay - this will darken all elements including multipliers
-        ctx.fillStyle = shadowGradient;
-        ctx.fillRect(nowLineX, 0, gradientEndX - nowLineX, h);
       }
 
       requestAnimationFrame(draw);
@@ -2778,16 +3291,29 @@ if (!otherUsersBets) {
     // Disable hover for cells to the left of the yellow NOW line
     if (x < nowLineX+CELL_SIZE) {
       hoverRef.current = null;
+      // Set default cursor when outside valid area
+      if (!isPanning2DRef.current && !isDraggingRef.current && !isInDragSelectionModeRef.current) {
+        canvas.style.cursor = 'default';
+      }
       return;
     }
 
     if (x < gx || x > gx + gridW || y < gy || y > gy + gridH) {
       hoverRef.current = null;
+      // Set default cursor when outside valid area
+      if (!isPanning2DRef.current && !isDraggingRef.current && !isInDragSelectionModeRef.current) {
+        canvas.style.cursor = 'default';
+      }
       return;
     }
 
     const timeOffsetSecNum = ((gx + gridW / 2 - centerX) / pxPerSec);
     hoverRef.current = { t: now + timeOffsetSecNum, gyIndex };
+    
+    // Set custom cursor when hovering over valid cells (not panning/dragging)
+    if (!isPanning2DRef.current && !isDraggingRef.current && !isInDragSelectionModeRef.current) {
+      canvas.style.cursor = `url("${customCursorSVG}") 13.5 13.5, auto`;
+    }
   };
 
   const handleMouseLeave = () => {
@@ -2802,7 +3328,7 @@ if (!otherUsersBets) {
     isPanning2DRef.current = false;
     panStartRef.current = null;
     
-    // Reset cursor - maintain crosshair if in multi-select mode
+    // Reset cursor - maintain crosshair if in multi-select mode, otherwise default
     const canvas = canvasRef.current;
     if (canvas) {
       canvas.style.cursor = isInDragSelectionModeRef.current ? 'crosshair' : 'default';
@@ -3218,6 +3744,30 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
     }
   }, [onScrollStateChange]);
 
+  // Track scroll state for recenter button visibility
+  useEffect(() => {
+    // Initial check
+    const initialScrolled = Math.abs(priceOffsetRef.current) > 0.001 || Math.abs(timeOffsetRef.current) > 0.001;
+    setIsScrolled(initialScrolled);
+    
+    const checkInterval = setInterval(() => {
+      const scrolled = Math.abs(priceOffsetRef.current) > 0.001 || Math.abs(timeOffsetRef.current) > 0.001;
+      setIsScrolled(scrolled);
+    }, 100); // Check every 100ms
+    
+    return () => clearInterval(checkInterval);
+  }, []);
+
+  // Handler to trigger recenter from button
+  const handleRecenter = () => {
+    if (isScrolled && !isRecenteringRef.current) {
+      isRecenteringRef.current = true;
+      recenterStartPriceOffsetRef.current = priceOffsetRef.current;
+      recenterStartTimeOffsetRef.current = timeOffsetRef.current;
+      recenterStartTimeRef.current = Date.now();
+    }
+  };
+
   // Handle recenter trigger from parent
   useEffect(() => {
     if (recenterTrigger > 0 && (Math.abs(priceOffsetRef.current) > 0.001 || Math.abs(timeOffsetRef.current) > 0.001)) {
@@ -3245,15 +3795,203 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
         }}
       />
       
+      {/* Recenter Button */}
+      <button
+        onClick={handleRecenter}
+        disabled={!isScrolled || isRecenteringRef.current}
+        style={{
+          position: 'absolute',
+          top: '2rem',
+          left: '5rem',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          padding: '8px',
+          background: (!isScrolled || isRecenteringRef.current) ? 'transparent' : '#091c0d',
+          border: (!isScrolled || isRecenteringRef.current) ? '1px solid #00FF241F' : '1px solid #00FF241F',
+          fontFamily: "'Geist Mono', monospace",
+          fontSize: '12px',
+          fontWeight: 300,
+          color: (!isScrolled || isRecenteringRef.current) ? '#4a4a4a' : '#ffffff',
+          cursor: (!isScrolled || isRecenteringRef.current) ? 'not-allowed' : 'pointer',
+          zIndex: 10000,
+          transition: 'all 0.2s ease',
+          opacity: isScrolled ? 1 : 0.5,
+          borderRadius: '8px',
+        }}
+          onMouseEnter={(e) => {
+            if (isScrolled && !isRecenteringRef.current) {
+              e.currentTarget.style.background = 'white';
+              e.currentTarget.style.color = '#141414';
+              e.currentTarget.style.transform = 'translateY(-1px)';
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (isScrolled && !isRecenteringRef.current) {
+              e.currentTarget.style.background = '#141414';
+              e.currentTarget.style.color = '#ffffff';
+              e.currentTarget.style.transform = 'translateY(0)';
+            }
+          }}
+          onMouseDown={(e) => {
+            if (isScrolled && !isRecenteringRef.current) {
+              e.currentTarget.style.transform = 'translateY(0)';
+            }
+          }}
+          title={isRecenteringRef.current ? "Recentering..." : isScrolled ? "Click to recenter chart" : "Chart is centered"}
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+<path d="M5.25009 9.43241L2.81759 6.99991L1.98926 7.82241L5.25009 11.0832L12.2501 4.08324L11.4276 3.26074L5.25009 9.43241Z" fill="#00FF24"/>
+</svg>
+
+          Follow Price
+        </button>
+      
+      {/* Real-time Activity Feed - Bottom Left */}
+      <div
+        ref={activityFeedRef}
+        style={{
+          position: 'absolute',
+          bottom: '16px',
+          left: '5rem',
+          width: '188px',
+          maxHeight: '324px',
+          padding: '12px',
+          paddingBottom: '14px',
+          zIndex: 1000,
+          fontFamily: "'Geist Mono', monospace",
+          fontSize: '12px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '12px',
+          borderRadius: '8px',
+          background: 'transparent',
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          scrollBehavior: 'smooth',
+        }}
+      >
+        {/* 2px gradient at bottom */}
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 0,
+            left: 0,
+            right: 0,
+            height: '2px',
+            background: 'linear-gradient(0deg, #021404 100%, #020202 100%)',
+            borderRadius: '0 0 8px 8px',
+            pointerEvents: 'none',
+            zIndex: 1,
+          }}
+        />
+        {activityFeed.length === 0 ? (
+          <div style={{ color: '#4D504D', fontSize: '16px', textAlign: 'center', position: 'relative', zIndex: 2 }}>
+            No activity yet
+          </div>
+        ) : (
+          activityFeed.map((activity, index) => (
+            <div
+              key={activity.id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                color: activity.type === 'won' && activity.isYou ? '#FFD700' : activity.type === 'won' ? '#ffffff' : '#4D504D',
+                position: 'relative',
+                zIndex: 2,
+                textShadow: activity.isNew ? '0 0 8px rgba(0, 255, 36, 0.8), 0 0 12px rgba(0, 255, 36, 0.6), 0 0 16px rgba(0, 255, 36, 0.4)' : 'none',
+                animation: activity.isNew ? 'textGlow 0.5s ease-out' : 'none',
+                transition: 'text-shadow 0.3s ease',
+              }}
+            >
+        
+              <span style={{ flex: 1, fontSize: '11px', lineHeight: '1.4' }}>
+                {activity.type === 'won' ? (
+                  <>
+                    {activity.isYou ? (
+                      <>
+                        <span style={{ 
+                          color: activity.isNew ? '#ffffff' : '#FFD700',
+                          fontSize: '16px',
+                          textShadow: activity.isNew ? '0 0 8px rgba(0, 255, 36, 0.8), 0 0 12px rgba(0, 255, 36, 0.6), 0 0 16px rgba(0, 255, 36, 0.4)' : 'none',
+                          animation: activity.isNew ? 'textGlow 0.5s ease-out' : 'none',
+                          transition: 'text-shadow 0.3s ease, color 0.3s ease',
+                        }}>You won</span>{' '}
+                        <span style={{ 
+                          color: activity.isNew ? '#00FF24' : '#00FF24',
+                          fontSize: '16px',
+                          textShadow: activity.isNew ? '0 0 8px rgba(0, 255, 36, 0.8), 0 0 12px rgba(0, 255, 36, 0.6), 0 0 16px rgba(0, 255, 36, 0.4)' : 'none',
+                          animation: activity.isNew ? 'textGlow 0.5s ease-out' : 'none',
+                          transition: 'text-shadow 0.3s ease',
+                        }}>${activity.amount.toFixed(2)} ({activity.multiplier?.toFixed(1)}X)</span>
+                      </>
+                    ) : (
+                      <>
+                        <span style={{
+                          color: activity.isNew ? '#ffffff' : '#ffffff',
+                          textShadow: activity.isNew ? '0 0 8px rgba(0, 255, 36, 0.8), 0 0 12px rgba(0, 255, 36, 0.6), 0 0 16px rgba(0, 255, 36, 0.4)' : 'none',
+                          animation: activity.isNew ? 'textGlow 0.5s ease-out' : 'none',
+                          transition: 'text-shadow 0.3s ease',
+                        }}>@{activity.username}</span>{' '}
+                        <span style={{ 
+                          color: activity.isNew ? '#ffffff' : '#ffffff',
+                          textShadow: activity.isNew ? '0 0 8px rgba(0, 255, 36, 0.8), 0 0 12px rgba(0, 255, 36, 0.6), 0 0 16px rgba(0, 255, 36, 0.4)' : 'none',
+                          animation: activity.isNew ? 'textGlow 0.5s ease-out' : 'none',
+                          transition: 'text-shadow 0.3s ease',
+                        }}>won</span>{' '}
+                        <span style={{ 
+                          color: activity.isNew ? '#00FF24' : '#00FF24',
+                          textShadow: activity.isNew ? '0 0 8px rgba(0, 255, 36, 0.8), 0 0 12px rgba(0, 255, 36, 0.6), 0 0 16px rgba(0, 255, 36, 0.4)' : 'none',
+                          animation: activity.isNew ? 'textGlow 0.5s ease-out' : 'none',
+                          transition: 'text-shadow 0.3s ease',
+                        }}>${activity.amount.toFixed(2)} ({activity.multiplier?.toFixed(1)}X)</span>
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <>
+                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                     <span style={{ 
+                       color: activity.isNew ? '#ffffff' : '#4D504D',
+                       fontSize: '12px',
+                       fontFamily: "'Geist Mono', monospace",
+                       textShadow: activity.isNew ? '0 0 8px rgba(0, 255, 36, 0.8), 0 0 12px rgba(0, 255, 36, 0.6), 0 0 16px rgba(0, 255, 36, 0.4)' : 'none',
+                       animation: activity.isNew ? 'textGlow 0.5s ease-out' : 'none',
+                       transition: 'text-shadow 0.3s ease, color 0.3s ease',
+                     }}>Added to pool</span>{' '}
+                     <span style={{ 
+                       color: activity.isNew ? '#00FF24' : '#01690F',
+                       fontSize: '16px',
+                       fontFamily: "'Geist Mono', monospace", 
+                       fontWeight: 900,
+                       fontStyle: 'italic',
+                       textShadow: activity.isNew ? '0 0 8px rgba(0, 255, 36, 0.8), 0 0 12px rgba(0, 255, 36, 0.6), 0 0 16px rgba(0, 255, 36, 0.4)' : 'none',
+                       animation: activity.isNew ? 'textGlow 0.5s ease-out' : 'none',
+                       transition: 'text-shadow 0.3s ease, color 0.3s ease',
+                     }}>+${activity.amount.toFixed(2)}</span>
+                   </div>
+                     </>
+                )}
+              </span>
+            </div>
+          ))
+        )}
+      </div>
+      
       {/* Waiting for Grid Loader - Only show if NOT showing success popup */}
       {isWaitingForGrid && !showGridIdPopup && (
-       
-
-<div className={styles.orderPill}>
-  <div className={styles.orderSpinner} />
-  <span className={styles.orderText}>Placing order 1/1</span>
+        <div className="absolute top-[5%] left-1/2 -translate-x-1/2 bg-black border border-white/20 rounded-[50px] px-3 py-2 inline-flex items-center gap-3 z-[1000] whitespace-nowrap animate-slide-down">
+          <div 
+            className="w-[18px] h-[18px] inline-block rounded-full animate-order-spin"
+            style={{
+              background: 'repeating-conic-gradient(from 0deg, #00ff24 0deg 6deg, rgba(0,255,36,0.15) 6deg 45deg)',
+              WebkitMask: 'radial-gradient(farthest-side, transparent calc(50% - 2.5px), #000 0)',
+              mask: 'radial-gradient(farthest-side, transparent calc(50% - 2.5px), #000 0)',
+            }}
+          />
+          <span className="text-white text-sm font-light font-geistMono">Placing order 1/1</span>
 </div>
-
       )}
       
       {/* Grid ID Info Popup - Top of Screen */}
@@ -3606,6 +4344,30 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
         @keyframes pulse {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.5; }
+        }
+        
+        @keyframes textGlow {
+          0% {
+            text-shadow: 0 0 12px rgba(0, 255, 36, 1), 0 0 18px rgba(0, 255, 36, 0.8), 0 0 24px rgba(0, 255, 36, 0.6);
+          }
+          50% {
+            text-shadow: 0 0 10px rgba(0, 255, 36, 0.9), 0 0 16px rgba(0, 255, 36, 0.7), 0 0 20px rgba(0, 255, 36, 0.5);
+          }
+          100% {
+            text-shadow: 0 0 8px rgba(0, 255, 36, 0.8), 0 0 12px rgba(0, 255, 36, 0.6), 0 0 16px rgba(0, 255, 36, 0.4);
+          }
+        }
+        
+        /* Activity Feed Scrollbar */
+        div[style*="overflowY"]::-webkit-scrollbar {
+          width: 4px;
+        }
+        div[style*="overflowY"]::-webkit-scrollbar-track {
+          background: rgba(0, 0, 0, 0.2);
+        }
+        div[style*="overflowY"]::-webkit-scrollbar-thumb {
+          background: rgba(0, 255, 36, 0.3);
+          border-radius: 2px;
         }
       `}</style>
     </div>

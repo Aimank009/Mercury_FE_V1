@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+// @ts-ignore - createPortal is available in react-dom
+import { createPortal } from 'react-dom';
 import { usePriceFeed } from '../contexts/PriceFeedContext';
 import { useGlobalLiquidity } from '../hooks/useGlobalLiquidity';
 import { STORAGE_KEYS } from '../config';
@@ -19,8 +21,12 @@ export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSe
   const [showTradingPairDropdown, setShowTradingPairDropdown] = useState(false);
   const [showAmountModal, setShowAmountModal] = useState(false);
   const [error, setError] = useState<string>('');
+  const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0 });
+  const [amountModalPosition, setAmountModalPosition] = useState({ top: 0, left: 0 });
   const amountModalRef = useRef<HTMLDivElement>(null);
+  const amountButtonRef = useRef<HTMLDivElement>(null);
   const tradingPairDropdownRef = useRef<HTMLDivElement>(null);
+  const tradingPairButtonRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -119,16 +125,27 @@ export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSe
   };
 
   return (
-    <div className="flex justify-between items-center px-2 sm:px-3 h-[64px] border-[0.08rem] border-[#162D19] bg-transparent relative">
+    <div className="flex justify-between items-center px-2 sm:px-3 h-[64px] border-[0.08rem] border-[#162D19] bg-transparent relative z-[100010]">
       <div className="flex items-center gap-1.5 sm:gap-2 md:gap-3 h-full min-w-0 flex-shrink">
-        <div className='border-r-2  border-[#162D19] h-full pr-1.5 sm:pr-2 md:pr-3 flex items-center flex-shrink-0'>
+        <div className='border-r-2  border-[#162D19] h-full pr-1.5 sm:pr-2 md:pr-3 flex items-center flex-shrink-0 relative z-[100004]'>
           <div 
-            onClick={() => setShowTradingPairDropdown(!showTradingPairDropdown)}
-            className="flex items-center gap-1 sm:gap-1.5 md:gap-2 px-1 py-1.5 border-t border-[#FFFFFF33] rounded-[12px] bg-[#1b301f] cursor-pointer transition-all duration-200"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (tradingPairButtonRef.current) {
+                const rect = tradingPairButtonRef.current.getBoundingClientRect();
+                setDropdownPosition({
+                  top: rect.bottom + 8,
+                  left: rect.left
+                });
+              }
+              setShowTradingPairDropdown(!showTradingPairDropdown);
+            }}
+            className="flex items-center gap-1 sm:gap-1.5 md:gap-2 px-1 py-1.5 border-t border-[#FFFFFF33] rounded-[12px] bg-[#1b301f] cursor-pointer transition-all duration-200 relative"
             style={{
               boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)',
             }}
-            ref={tradingPairDropdownRef}
+            ref={tradingPairButtonRef}
           >
             <div className="w-6 h-6 sm:w-7 sm:h-7 md:w-8 md:h-8 rounded-full bg-[#0f0f0f] flex items-center justify-center flex-shrink-0"
                  style={{
@@ -157,12 +174,20 @@ export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSe
               </svg>
             </div>
 
-            {showTradingPairDropdown && (
-              <div className="absolute top-[calc(90%)] left-5 z-[100] w-[180px] border border-white/20 bg-[#354639] rounded-lg shadow-lg">
+            {showTradingPairDropdown && typeof window !== 'undefined' && createPortal(
+              <div 
+                className="fixed z-[999999] w-[180px] border border-white/20 bg-[#354639] rounded-lg shadow-lg"
+                style={{
+                  top: `${dropdownPosition.top}px`,
+                  left: `${dropdownPosition.left}px`
+                }}
+                ref={tradingPairDropdownRef}
+              >
                 <div className=" flex justify-center px-2 py-3 text-sm text-white/60 font-['Geist_Mono',monospace]">
                   Coming soon
                 </div>
-              </div>
+              </div>,
+              document.body
             )}
 
           </div>
@@ -181,10 +206,22 @@ export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSe
      
       <div className="flex items-center gap-0.5 sm:gap-1 border-l-2 border-[#162D19] h-full min-w-0 flex-shrink">
         {/* Amount Display */}
-        <div className="relative border-r-2 border-[#162D19] h-full flex items-center px-1 sm:px-1.5 md:px-2 flex-shrink-0" ref={amountModalRef}>
+        <div className="relative border-r-2 border-[#162D19] h-full flex items-center px-1 sm:px-1.5 md:px-2 flex-shrink-0">
           <div 
-            onClick={() => setShowAmountModal(!showAmountModal)}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (amountButtonRef.current) {
+                const rect = amountButtonRef.current.getBoundingClientRect();
+                setAmountModalPosition({
+                  top: rect.bottom + 16,
+                  left: rect.right - 220 // 322px is the width of the modal
+                });
+              }
+              setShowAmountModal(!showAmountModal);
+            }}
             className="flex items-center gap-1 sm:gap-1.5 md:gap-2 px-1.5 sm:px-2 md:px-3 py-1.5 border-t border-[#FFFFFF33] rounded-[12px] bg-[#1b301f]  cursor-pointer transition-all duration-200 hover:opacity-90"
+            ref={amountButtonRef}
           >
             <span className="font-['Geist_Mono',monospace] text-[12px] sm:text-[14px] md:text-base font-semibold text-white whitespace-nowrap">
               ${amount.toFixed(2)}
@@ -203,8 +240,15 @@ export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSe
           </div>
 
           {/* Amount Modal Dropdown */}
-          {showAmountModal && (
-            <div className="absolute top-full -right-[6rem] mt-2 z-[10000] w-[322px] border border-[#162A19] bg-[#001704] rounded-xl shadow-lg">
+          {showAmountModal && typeof window !== 'undefined' && createPortal(
+            <div 
+              className="fixed z-[999999] w-[322px] border border-[#162A19] bg-[#001704] rounded-xl shadow-lg"
+              style={{
+                top: `${amountModalPosition.top}px`,
+                left: `${amountModalPosition.left}px`
+              }}
+              ref={amountModalRef}
+            >
               <div className="space-y-3 p-3">
                 <div className="flex flex-col gap-2.5">
                   <input
@@ -268,7 +312,8 @@ export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSe
                   </button>
                 </div>
               </div>
-            </div>
+            </div>,
+            document.body
           )}
         </div>
 

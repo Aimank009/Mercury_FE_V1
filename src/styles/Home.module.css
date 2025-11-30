@@ -12,13 +12,31 @@
   max-width: 1900px;
   margin-left: auto;
   margin-right: auto;
+  background: #000000; /* Base black background */
+}
+
+/* Diagonal gradient overlay from top-right to bottom-left */
+.tradingContainer::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   background: linear-gradient(to bottom, 
-    #011b04 0%,      /* Navbar color - starts here */
-    #001705 7.5%,    /* TradingInfo color - approximately 64px height */
-    #001705 8%,      /* End of TradingInfo */
-    #011002 8.5%,    /* Start of chart gradient */
-    #000000 100%     /* End of chart - black */
+    #011b04 0%,      /* Top-right: Navbar area - green */
+    #001705 15%,     /* TradingInfo area - green */
+    #011002 35%,     /* Mid-point - darker green */
+    #000000 100%     /* Bottom-left: End - black */
   );
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Ensure content is above the gradient */
+.tradingContainer > * {
+  position: relative;
+  z-index: 1;
 }
 
 .main {
@@ -48,29 +66,9 @@
 }
 
 /* 2) Tight ~40px fade band, softened a little, NOT touching side borders */
+/* Removed gradient overlay that was affecting time labels */
 .main::before {
-  content: "";
-  position: absolute;
-  top: 0; left: 0; right: 0;
-  height: 40px;                   /* Figma shows ~40px */
-  z-index: 2;
-  pointer-events: none;
-
-  /* green -> transparent */
-  background: linear-gradient(
-    to bottom,
-    rgba(0,255,56,0.10) 0%,
-    rgba(0,255,56,0.06) 35%,
-    rgba(0,255,56,0.00) 100%
-  );
-
-  /* keep it tight (less haze than before) */
-  filter: blur(4px);
-  transform: translateY(-1px);
-
-  /* keep glow away from left/right edges ~8px like Figma */
-  -webkit-mask-image: linear-gradient(to right, transparent 0 8px, #000 8px calc(100% - 8px), transparent calc(100% - 8px));
-          mask-image: linear-gradient(to right, transparent 0 8px, #000 8px calc(100% - 8px), transparent calc(100% - 8px));
+  display: none;
 }
 
 
@@ -80,6 +78,37 @@
   display: flex;
   height: 100%;
   width: 100%;
+}
+
+/* Ensure chart content is above the gradient */
+.chartSection > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* Make canvas background transparent */
+.chartSection canvas {
+  background: transparent !important;
+}
+
+/* Radial gradient on the right side of the chart */
+.chartSection::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  background: radial-gradient(
+    ellipse 300% 250% at top right,
+    #011b04 0%,
+    #001705 15%,
+    #011002 30%,
+    #000000 100%
+  );
+  pointer-events: none;
+  z-index: 0;
+  mix-blend-mode: normal;
 }
 
 @media (max-width: 1200px) {

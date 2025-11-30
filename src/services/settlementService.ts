@@ -16,22 +16,26 @@ export interface SettlementResult {
 }
 
 /**
- * Check if a bet wins against settlement price
+ * Check if a bet wins against settlement price range
  * @param bet - Bet data from database
- * @param settlementPrice - Settlement price in decimal format
+ * @param settlementPriceMin - Minimum settlement price in decimal format
+ * @param settlementPriceMax - Maximum settlement price in decimal format
  * @param calculatedMultiplier - Multiplier calculated at bet time
  * @returns Win status and final multiplier
  */
 export const checkBetAgainstSettlement = (
   bet: BetData,
-  settlementPrice: number,
+  settlementPriceMin: number,
+  settlementPriceMax: number,
   calculatedMultiplier: number
 ): { isWin: boolean; finalMultiplier: number; newStatus: 'won' | 'lost' } => {
   const priceMin = parseFloat(bet.price_min.toString()) / 1e8;
   const priceMax = parseFloat(bet.price_max.toString()) / 1e8;
   
-  // Check if settlement price is within bet's price range
-  const isWin = settlementPrice >= priceMin && settlementPrice <= priceMax;
+  // Check if settlement price range OVERLAPS with bet's price range
+  // A bet wins if there's any overlap between [settlementPriceMin, settlementPriceMax] and [priceMin, priceMax]
+  // Overlap exists if: settlementPriceMin < priceMax && settlementPriceMax > priceMin
+  const isWin = settlementPriceMin < priceMax && settlementPriceMax > priceMin;
   const newStatus = isWin ? 'won' : 'lost';
   
   // Determine multiplier: keep calculated multiplier if win, set to 0 if loss
@@ -44,21 +48,26 @@ export const checkBetAgainstSettlement = (
  * Update bet settlement in database
  * @param eventId - Bet event ID
  * @param status - 'won' or 'lost'
- * @param settlementPrice - Settlement price in decimal format
+ * @param settlementPriceMin - Minimum settlement price in decimal format
+ * @param settlementPriceMax - Maximum settlement price in decimal format
  * @param multiplier - Final multiplier (0 if loss, original if win)
  */
 export const updateBetSettlement = async (
   eventId: string,
   status: 'won' | 'lost',
-  settlementPrice: number,
+  settlementPriceMin: number,
+  settlementPriceMax: number,
   multiplier: number
 ): Promise<void> => {
+  // Store the middle price of the settlement range as the settlement_price for backward compatibility
+  const settlementPriceMiddle = (settlementPriceMin + settlementPriceMax) / 2;
+  
   const { error } = await supabase
     .from('bet_placed_with_session')
     .update({ 
       status, 
       settled_at: new Date().toISOString(),
-      settlement_price: Math.floor(settlementPrice * 1e8), // Store in cents
+      settlement_price: Math.floor(settlementPriceMiddle * 1e8), // Store middle of range for backward compatibility
       multiplier // Keep multiplier if win, 0 if loss
     })
     .eq('event_id', eventId);
@@ -71,14 +80,16 @@ export const updateBetSettlement = async (
 
 /**
  * Process settlement for all bets in a timeperiod
- * Determines win/loss status for each bet based on settlement price
+ * Determines win/loss status for each bet based on settlement price range
  * @param timeperiodId - Timeperiod ID
- * @param settlementPrice - Settlement price in decimal format
+ * @param settlementPriceMin - Minimum settlement price in decimal format
+ * @param settlementPriceMax - Maximum settlement price in decimal format
  * @returns Array of settlement results with grid_id and status
  */
 export const processAllBetsSettlement = async (
   timeperiodId: number,
-  settlementPrice: number
+  settlementPriceMin: number,
+  settlementPriceMax: number
 ): Promise<Array<{ gridId: string; status: 'win' | 'loss' }>> => {
   try {
     const { data: allBets, error } = await supabase
@@ -106,7 +117,11 @@ export const processAllBetsSettlement = async (
 
       // Create grid_id matching the format used in allUsersBetsRef
       const gridId = `${timeperiodId}_${priceMin.toFixed(2)}_${priceMax.toFixed(2)}`;
-      const status: 'win' | 'loss' = settlementPrice >= priceMin && settlementPrice <= priceMax ? 'win' : 'loss';
+      
+      // Check if settlement price range OVERLAPS with bet's price range
+      // A bet wins if there's any overlap between [settlementPriceMin, settlementPriceMax] and [priceMin, priceMax]
+      // Overlap exists if: settlementPriceMin < priceMax && settlementPriceMax > priceMin
+      const status: 'win' | 'loss' = settlementPriceMin < priceMax && settlementPriceMax > priceMin ? 'win' : 'loss';
       
       results.push({ gridId, status });
     });

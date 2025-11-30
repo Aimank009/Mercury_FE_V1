@@ -104,7 +104,7 @@ export function useAllUsersBetsQuery({
       )
       .subscribe((status) => {
         if (status === 'SUBSCRIBED') {
-          console.log('✅ Supabase Realtime subscription active for all users bets');
+          // console.log('✅ Supabase Realtime subscription active for all users bets');
         }
       });
 

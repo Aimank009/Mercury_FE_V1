@@ -95,8 +95,8 @@ export const SPACING = {
  * Chart colors
  */
 export const CHART_COLORS = {
-  BACKGROUND: '#0a0e27',
-  GRID_LINE: 'rgba(100, 120, 150, 0.35)',
+  BACKGROUND: '#000000',
+  GRID_LINE: 'rgb(39, 102, 49, 0.4)', // Lighter, more visible grid lines
   PRICE_LINE: '#00ff00',
   SELECTED_CELL: 'rgba(255, 255, 0, 0.3)',
   HOVER_CELL: 'rgba(255, 255, 255, 0.1)',
