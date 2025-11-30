@@ -5,6 +5,7 @@ import { useAccount, useBalance, useDisconnect } from 'wagmi';
 import { useState, useEffect,useRef } from 'react';
 import { useSessionTrading } from '../contexts/SessionTradingContext';
 import { useWrapperBalance } from '../hooks/useWrapperBalance';
+import { useUserProfile } from '../hooks/useUserProfile';
 
 interface NavbarProps {
   onDepositClick?: () => void;
@@ -17,6 +18,7 @@ export default function Navbar({ onDepositClick, onEnableTrading }: NavbarProps)
   const { sdk } = useSessionTrading();
   const { data: balance } = useBalance({ address });
   const { balanceUSD: wrapperBalanceUSD, isLoading: isLoadingWrapper } = useWrapperBalance(address);
+  const { profile } = useUserProfile();
 
   const [showAccountMenu, setShowAccountMenu] = useState(false);
   const [hasActiveSession, setHasActiveSession] = useState(false);
@@ -282,37 +284,77 @@ export default function Navbar({ onDepositClick, onEnableTrading }: NavbarProps)
               <div 
                 ref={accountMenuRef}
                 onClick={() => setShowAccountMenu((prev) => !prev)}
-                className="hidden md:flex relative items-center bg-transparent border border-white/30 rounded-full h-[40px] px-3 lg:px-4 xl:px-5 py-2 gap-2 lg:gap-[10px] cursor-pointer transition-all duration-200 hover:opacity-90 z-50"
+                className="hidden md:flex relative items-center bg-transparent border border-white/30 rounded-full h-[40px] px-3 lg:px-4 xl:px-5 py-2 gap-2 lg:gap-[10px] cursor-pointer transition-all duration-200 z-50"
                 style={{
                   boxShadow: '0 4px 14.6px rgba(0, 0, 0, 0.1)'
                 }}
               >
-                <div className="w-6 h-6 rounded-full bg-red-500 flex items-center justify-center flex-shrink-0">
-                </div>
+                {profile?.avatar_url ? (
+                  <img 
+                    src={profile.avatar_url} 
+                    alt="Avatar" 
+                    className="w-6 h-6 rounded-full object-cover flex-shrink-0 border border-white/20"
+                  />
+                ) : (
+                  <div className="w-6 h-6 rounded-full bg-red-500 flex items-center justify-center flex-shrink-0"></div>
+                )}
                 <span className="font-[Geist Mono] text-[11px] md:text-[12px] text-white whitespace-nowrap">
-                  {formatAddress(address)}
+                  {profile?.username ? `@${profile.username}` : formatAddress(address)}
                 </span>
                 <div
                   className="flex items-center justify-center text-white flex-shrink-0"
                 >
                  <svg width="11" height="6" viewBox="0 0 11 6" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M5.5 6L0 0H11L5.5 6Z" fill="#CCD1CD"/>
-</svg>
+                    <path d="M5.5 6L0 0H11L5.5 6Z" fill="#CCD1CD"/>
+                </svg>
                 </div>
 
                 {showAccountMenu && (
-                  <div className="absolute top-[calc(100%+8px)] right-0 min-w-full bg-[#354639] border border-white/30 shadow-[0_4px_12px_rgba(0,0,0,0.5)] z-[10000] rounded-full">
-                  <button
-                    className="w-full h-[44px] px-3 md:px-4 flex items-center justify-center text-xs md:text-sm text-white transition-colors duration-200 hover:bg-[#354639] hover:text-[#ff4444] rounded-full"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      disconnect();
-                      setShowAccountMenu(false);
-                    }}
-                  >
-                    Disconnect
-                  </button>
-                </div>
+                  <div className="absolute top-[calc(100%+8px)] -right-7 w-[234px] bg-[#001704] border-[1.5px] border-[#162A19] shadow-[0_0_23.6px_6px_rgba(0,0,0,0.5)] z-[10000] rounded-[12px] px-[24px] py-[26px] flex flex-col items-center gap-[10px]">
+                    {/* Avatar */}
+                    <div className="w-[59px] h-[59px] rounded-full overflow-hidden border-[1.5px] border-[#162A19]">
+                       {profile?.avatar_url ? (
+                          <img src={profile.avatar_url} alt="Profile" className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="w-full h-full bg-gradient-to-br from-[#FFD700] to-[#FFA500]" />
+                        )}
+                    </div>
+                    
+                    {/* Username */}
+                    <div className="font-geist font-medium text-[16px] text-white mb-[6px]">
+                      {profile?.username || formatAddress(address)}
+                    </div>
+
+                    {/* Contact Support Button */}
+                    <button
+                      className="w-full h-[30px] flex items-center justify-center gap-2 bg-white/10 rounded-[12px] text-[#888888] text-[12px] hover:text-white transition-colors duration-200"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                      }}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M3 18v-6a9 9 0 0 1 18 0v6"></path>
+                        <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path>
+                      </svg>
+                      Contact Support
+                    </button>
+
+                    {/* Logout Button */}
+                    <button
+                      className="w-full h-[30px] flex items-center justify-center gap-2 bg-white/10 rounded-[12px] text-[#FF4444] text-[12px] hover:text-[#f0b7c0] transition-colors duration-200"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        disconnect();
+                        setShowAccountMenu(false);
+                      }}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path>
+                        <line x1="12" y1="2" x2="12" y2="12"></line>
+                      </svg>
+                      Logout
+                    </button>
+                  </div>
                 )}
               </div>
               

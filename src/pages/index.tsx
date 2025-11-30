@@ -6,8 +6,8 @@ import Navbar from '../components/Navbar';
 import TradingInfo from '../components/TradingInfo';
 import TradingChart from '../components/TradingChart';
 import Positions from '../components/Positions';
-import TermsModal from '../components/TermsModal';
-import TutorialModal from '../components/TutorialModal';
+import AccessCodeModal from '../components/AccessCodeModal';
+import UserCreationModal from '../components/UserCreationModal';
 import DepositWithdrawModal from '../components/DepositWithdrawModal';
 import SessionNotification from '../components/SessionNotification';
 import OrderNotification from '../components/OrderNotification';
@@ -28,9 +28,9 @@ const Home: NextPage = () => {
   const {
     canAccessApp,
     showTermsModal,
-    showTutorialModal,
+    showUserCreationModal,
     handleAcceptTerms,
-    handleCompleteTutorial,
+    handleProfileCreated,
     handleCloseModal,
     sessionStatus,
     clearSessionStatus,
@@ -104,7 +104,7 @@ const Home: NextPage = () => {
           if (success) {
             setShowTradingEnabledPopup(true);
           }
-          return success;
+          return !!success;
         }}
       />
       
@@ -119,17 +119,17 @@ const Home: NextPage = () => {
         />
       )}
       
-      {/* Show terms modal when user connects but hasn't accepted terms */}
-      <TermsModal
+      {/* Show access code modal when user connects but hasn't entered code */}
+      <AccessCodeModal
         isOpen={showTermsModal}
-        onAccept={handleAcceptTerms}
-        onClose={handleCloseModal}
+        onSuccess={handleAcceptTerms}
       />
 
-      {/* Show tutorial modal after user accepts terms */}
-      <TutorialModal
-        isOpen={showTutorialModal}
-        onComplete={handleCompleteTutorial}
+      {/* Show user creation modal after user enters code */}
+      <UserCreationModal
+        isOpen={showUserCreationModal}
+        onSuccess={handleProfileCreated}
+        walletAddress={address || ''}
       />
 
       {/* Deposit/Withdraw Modal */}
@@ -197,7 +197,7 @@ const Home: NextPage = () => {
       )}
 
       {/* Show a placeholder message if user is connected but hasn't completed onboarding */}
-      {isConnected && !canAccessApp && !showTermsModal && !showTutorialModal && (
+      {isConnected && !canAccessApp && !showTermsModal && !showUserCreationModal && (
         <div className={styles.placeholderMessage}>
           <h2>Welcome to Mercury Trade</h2>
           <p>Please complete the onboarding to start trading.</p>

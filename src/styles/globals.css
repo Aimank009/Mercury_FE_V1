@@ -59,3 +59,146 @@
     }
   }
 }
+
+/* Simple backdrop blur - target the overlay div inside [data-rk] */
+[data-rk] > div:first-child {
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+}
+[data-rk] [role="dialog"] > div:first-child,
+[data-rk] [role="dialog"] > div,
+[data-rk] [role="dialog"] > div > div,
+[data-rk] [role="dialog"] > div > div > div,
+[data-rk] [role="dialog"] div.iekbcc0 {
+  background-color: #0d150d !important;
+}
+
+/* Target any element with white background inside dialog */
+[data-rk] [role="dialog"] [style*="background"],
+[data-rk] [role="dialog"] [class*="ju367v"] {
+  background-color: #0d150d !important;
+}
+
+/* Ensure text is visible on dark background */
+[data-rk] [role="dialog"] h1,
+[data-rk] [role="dialog"] h2,
+[data-rk] [role="dialog"] h3,
+[data-rk] [role="dialog"] h4,
+[data-rk] [role="dialog"] p,
+[data-rk] [role="dialog"] div {
+  color: #ffffff !important;
+}
+
+/* Main Modal Container Styling - Target ONLY the main card */
+[data-rk] [role="dialog"] > div:nth-of-type(2) > div:first-child {
+  border-radius: 24px !important;
+  /* Gradient border trick: padding-box background + border-box gradient */
+  background: linear-gradient(#0d150d, #0d150d) padding-box,
+              linear-gradient(180deg, rgba(255, 255, 255, 0.4) 0%, rgba(255, 255, 255, 0.1) 40%, rgba(255, 255, 255, 0) 100%) border-box !important;
+  border: 1px solid transparent !important;
+  box-shadow: 0px 8px 32px rgba(0, 0, 0, 0.5) !important;
+}
+
+/* Wallet option styling - rounded borders, no borders at all */
+[data-rk] [role="dialog"] button[data-testid*="rk-wallet-option"] {
+  border-radius: 12px !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  transition: all 0.2s ease !important;
+}
+
+/* Remove all borders from child elements inside wallet options */
+[data-rk] [role="dialog"] button[data-testid*="rk-wallet-option"] * {
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background-color: transparent !important;
+}
+
+/* Wallet option hover effect - no border, no outline, no box-shadow */
+[data-rk] [role="dialog"] button[data-testid*="rk-wallet-option"]:hover {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+  /* show a thin 1px border on hover for clearer focus */
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Remove all borders from child elements on hover */
+[data-rk] [role="dialog"] button[data-testid*="rk-wallet-option"]:hover * {
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background-color: transparent !important;
+}
+
+/* Green background for "Get a Wallet" button - completely green */
+[data-rk] [role="dialog"] button.ju367v77,
+[data-rk] [role="dialog"] button.ju367vvm {
+  background-color: #00FF24 !important;
+  background: #00FF24 !important;
+  color: #000000 !important;
+  border-radius: 24px !important;
+  border: none !important;
+  transition: all 0.3s ease !important;
+}
+
+/* Remove any black boxes or backgrounds inside the button */
+[data-rk] [role="dialog"] button.ju367v77 > *,
+[data-rk] [role="dialog"] button.ju367vvm > *,
+[data-rk] [role="dialog"] button.ju367v77 div,
+[data-rk] [role="dialog"] button.ju367vvm div {
+  background-color: transparent !important;
+  background: transparent !important;
+  color: #000000 !important;
+}
+
+[data-rk] [role="dialog"] button.ju367v77:hover,
+[data-rk] [role="dialog"] button.ju367vvm:hover {
+  background-color: #00FF24 !important;
+  background: #00FF24 !important;
+  color: #000000 !important;
+  border: none !important;
+}
+
+/* Ensure hover state also removes black boxes */
+[data-rk] [role="dialog"] button.ju367v77:hover > *,
+[data-rk] [role="dialog"] button.ju367vvm:hover > *,
+[data-rk] [role="dialog"] button.ju367v77:hover div,
+[data-rk] [role="dialog"] button.ju367vvm:hover div {
+  background-color: transparent !important;
+  background: transparent !important;
+  color: #000000 !important;
+}
+
+/* Close button styling */
+[data-rk] [role="dialog"] button[aria-label="Close"] {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+  border-radius: 50% !important;
+  width: 32px !important;
+  height: 32px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  transition: all 0.2s ease !important;
+  border: none !important;
+  position: absolute !important;
+  top: 20px !important;
+  right: 20px !important;
+}
+
+[data-rk] [role="dialog"] button[aria-label="Close"]:hover {
+  background-color: rgba(255, 255, 255, 0.2) !important;
+  transform: scale(1.05);
+}
+
+[data-rk] [role="dialog"] button[aria-label="Close"] svg {
+  width: 14px !important;
+  height: 14px !important;
+  color: rgba(255, 255, 255, 0.6) !important;
+}
+
+[data-rk] [role="dialog"] button[aria-label="Close"]:hover svg {
+  color: #ffffff !important;
+}
