@@ -3,6 +3,11 @@ module.exports = {
   content: ['./src/**/*.{js,ts,jsx,tsx}'],
   theme: {
     extend: {
+      screens: {
+        'xs': '480px',
+        '3xl': '1920px',
+        '4xl': '2560px',
+      },
       colors: {
         mercury: {
           bg: '#1d1d1f',

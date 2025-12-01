@@ -6,6 +6,7 @@ import { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useUserBets } from '../hooks/useUserBets';
 import { usePositionsWebSocket } from '../hooks/usePositionsWebSocket';
+import { supabase } from '../lib/supabaseClient';
 import clsx from 'clsx';
 
 // Memoized components for performance
@@ -21,7 +22,7 @@ const StatusBadge = memo(({ status, price }: { status: string; price: string | n
     >
       {status}
     </span>
-    {price && <span className="text-[#999] inline-block text-[12px]">{price}</span>}
+    {/* {price && <span className="text-[#999] inline-block text-[12px]">{price}</span>} */}
   </div>
 ));
 StatusBadge.displayName = 'StatusBadge';
@@ -178,6 +179,72 @@ export default function Positions() {
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  // Real-time subscription for new bets using Supabase
+  useEffect(() => {
+    if (!address) return;
+
+    console.log('🔔 Setting up Supabase real-time subscription for Positions...');
+
+    const channel = supabase
+      .channel('positions-new-bets')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'bet_placed_with_session',
+        },
+        (payload) => {
+          // Check if this bet is from the current user
+          const newBet = payload.new as Record<string, unknown>;
+          if ((newBet.user_address as string)?.toLowerCase() === address.toLowerCase()) {
+            console.log('📥 New bet detected for current user:', newBet);
+            // Refetch to get the latest data with proper formatting
+            refetch();
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'bet_placed_with_session',
+        },
+        (payload) => {
+          // Check if this bet is from the current user
+          const updatedBet = payload.new as Record<string, unknown>;
+          if ((updatedBet.user_address as string)?.toLowerCase() === address.toLowerCase()) {
+            console.log('📝 Bet updated for current user:', updatedBet);
+            // Refetch to get the latest data
+            refetch();
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log('📡 Positions Supabase subscription status:', status);
+      });
+
+    return () => {
+      console.log('🔕 Cleaning up Positions Supabase subscription...');
+      supabase.removeChannel(channel);
+    };
+  }, [address, refetch]);
+
+  // Listen for newBetPlaced event from TradingChart as backup
+  useEffect(() => {
+    const handleNewBetPlaced = () => {
+      console.log('📢 newBetPlaced event received, refetching positions...');
+      // Small delay to allow database to update
+      setTimeout(() => {
+        refetch();
+      }, 500);
+    };
+
+    window.addEventListener('newBetPlaced', handleNewBetPlaced);
+    return () => window.removeEventListener('newBetPlaced', handleNewBetPlaced);
+  }, [refetch]);
 
   // Calculate items per page based on available viewport height
   useEffect(() => {
@@ -341,7 +408,7 @@ export default function Positions() {
   return (
     <div 
       ref={containerRef}
-      className="bg-[#000000] border border-[rgba(214,213,212,0.1)] mx-auto p-0 h-[100vh] overflow-hidden flex flex-col w-[100vw] max-w-[1900px]"
+      className="bg-[#000000] border border-[rgba(214,213,212,0.1)] p-0 h-full overflow-hidden flex flex-col w-full"
     >
       <div 
         ref={headerRef}
@@ -433,7 +500,7 @@ export default function Positions() {
             <table className="w-full border-collapse text-sm min-w-[600px] md:min-w-0">
               <thead ref={tableHeaderRef} className="bg-[#141414] sticky top-0 z-10">
                 <tr>
-                  {['Date & Time', 'Price Range', 'Expiry Time', 'Amount', 'Payout', 'Settlement & Price', 'Status'].map(
+                  {['Date & Time', 'Price Range', 'Expiry Time', 'Amount', 'Payout', 'Settlement', 'Status'].map(
                     (label) => (
                       <th
                         key={label}

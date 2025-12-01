@@ -179,10 +179,35 @@ export function calculateSimplifiedMultiplier(
 
 // Cache for grid lookups to improve performance
 const gridCache = new Map<string, { gridId: string; priceMin: string; priceMax: string; shares: number; timestamp: number }>();
-const CACHE_TTL = 30000; // 30 seconds cache (increased for better performance)
+const CACHE_TTL = 60000; // 60 seconds cache (increased to reduce API calls)
 
 // Pending requests map to prevent duplicate queries
 const pendingRequests = new Map<string, Promise<{ gridId: string; shares: number } | null>>();
+
+// Rate limiting - max concurrent requests
+let activeRequests = 0;
+const MAX_CONCURRENT_REQUESTS = 3;
+const requestQueue: Array<() => void> = [];
+
+async function waitForSlot(): Promise<void> {
+  if (activeRequests < MAX_CONCURRENT_REQUESTS) {
+    activeRequests++;
+    return;
+  }
+  
+  return new Promise((resolve) => {
+    requestQueue.push(() => {
+      activeRequests++;
+      resolve();
+    });
+  });
+}
+
+function releaseSlot(): void {
+  activeRequests--;
+  const next = requestQueue.shift();
+  if (next) next();
+}
 
 /**
  * Calculate price range (min/max) for a grid cell
@@ -234,8 +259,9 @@ async function fetchGridAndShares(
       return await pending;
     }
     
-    // Create new request promise
+    // Create new request promise with rate limiting
     const requestPromise = (async () => {
+      await waitForSlot(); // Rate limit
       try {
         // Step 1: Find grid_id from grid_created table
         const { data: gridData, error: gridError } = await supabase
@@ -248,7 +274,10 @@ async function fetchGridAndShares(
           .maybeSingle();
 
         if (gridError) {
-          console.error('❌ Error finding grid:', gridError);
+          // Don't spam console with connection errors
+          if (!gridError.message?.includes('ERR_CONNECTION') && !gridError.message?.includes('Failed to fetch')) {
+            console.error('❌ Error finding grid:', gridError);
+          }
           return null;
         }
 
@@ -281,6 +310,7 @@ async function fetchGridAndShares(
         
         return result;
       } finally {
+        releaseSlot(); // Release rate limit slot
         // Remove from pending requests
         pendingRequests.delete(cacheKey);
       }
@@ -291,7 +321,11 @@ async function fetchGridAndShares(
     
     return await requestPromise;
   } catch (err) {
-    console.error('❌ Exception fetching grid and shares:', err);
+    // Don't spam console with connection errors
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (!errMsg.includes('ERR_CONNECTION') && !errMsg.includes('Failed to fetch')) {
+      console.error('❌ Exception fetching grid and shares:', err);
+    }
     return null;
   }
 }

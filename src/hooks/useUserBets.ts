@@ -224,13 +224,14 @@ async function fetchBetsBatch({
   }
 
   const offset = pageParam * BATCH_SIZE;
-  console.log(`🔍 Fetching batch (offset: ${offset}, limit: ${BATCH_SIZE}) for user: ${userAddress}...`);
+  const normalizedAddress = userAddress.toLowerCase();
+  console.log(`🔍 Fetching batch (offset: ${offset}, limit: ${BATCH_SIZE}) for user: ${normalizedAddress}...`);
 
   try {
     const { data, error, count } = await supabase
       .from(TABLES.BET_PLACED_WITH_SESSION)
       .select('*', { count: 'exact' })
-      .ilike('user_address', userAddress) // Use ilike for case-insensitive matching
+      .ilike('user_address', normalizedAddress) // Use ilike for case-insensitive matching
       .order('created_at', { ascending: false })
       .range(offset, offset + BATCH_SIZE - 1);
 
@@ -255,7 +256,8 @@ async function fetchBetsBatch({
     });
 
     if (!data || data.length === 0) {
-      console.log('⚠️ No bets found for user:', userAddress.toLowerCase());
+      console.log('⚠️ No bets found with ilike for user:', normalizedAddress);
+      
       // Check if there are ANY bets in the table (debug)
       const { count: totalBets } = await supabase
         .from(TABLES.BET_PLACED_WITH_SESSION)
@@ -268,19 +270,31 @@ async function fetchBetsBatch({
         .select('user_address')
         .limit(10);
       console.log('📝 Sample addresses in DB:', sampleAddresses?.map(b => b.user_address));
+      console.log('📝 Looking for address:', normalizedAddress);
       
-      // Try case-insensitive search
-      const { data: caseInsensitiveData, count: caseInsensitiveCount } = await supabase
+      // Fallback: Fetch all recent bets and filter client-side by address
+      console.log('🔍 Trying client-side filtering fallback...');
+      const { data: allRecentBets, error: allError } = await supabase
         .from(TABLES.BET_PLACED_WITH_SESSION)
-        .select('*', { count: 'exact' })
-        .ilike('user_address', userAddress.toLowerCase())
+        .select('*')
         .order('created_at', { ascending: false })
-        .limit(5);
+        .limit(500);
       
-      console.log(`🔍 Case-insensitive search found ${caseInsensitiveCount || 0} bets`);
-      if (caseInsensitiveData && caseInsensitiveData.length > 0) {
-        console.log('✅ Found bets with case-insensitive search! Using those instead...');
-        const formattedPositions = await formatPositions(caseInsensitiveData);
+      if (allError) {
+        console.error('❌ Error fetching all bets:', allError);
+        return { data: [], nextCursor: null };
+      }
+      
+      // Filter client-side for case-insensitive address match
+      const matchingBets = allRecentBets?.filter(bet => 
+        bet.user_address.toLowerCase() === normalizedAddress
+      ) || [];
+      
+      console.log(`✅ Client-side filter found ${matchingBets.length} matching bets`);
+      
+      if (matchingBets.length > 0) {
+        console.log('📊 First matching bet:', matchingBets[0]);
+        const formattedPositions = await formatPositions(matchingBets);
         return { data: formattedPositions, nextCursor: null };
       }
       

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAccount } from 'wagmi';
 import { useSessionTrading } from '../contexts/SessionTradingContext';
 import { supabase } from '../lib/supabaseClient';
+import { triggerProfileRefresh } from './useUserProfile';
 
 interface OnboardingState {
   hasAcceptedTerms: boolean;
@@ -42,11 +43,50 @@ export function useOnboarding() {
     const checkOnboardingStatus = async () => {
       setState(prev => ({ ...prev, isLoadingProfile: true }));
       
-      // 1. Check Access Code (Local Storage)
       const accessKey = `mercury_access_granted_${address.toLowerCase()}`;
+      
+      // 1. FIRST check if user already exists in database (case-insensitive)
+      try {
+        console.log('🔍 Checking if user exists in database:', address);
+        
+        const { data: existingUser, error: userError } = await supabase
+          .from('users')
+          .select('wallet_address, username')
+          .ilike('wallet_address', address) // Case-insensitive match!
+          .maybeSingle(); // Use maybeSingle to avoid error when no rows
+        
+        if (existingUser && !userError) {
+          // ✅ USER EXISTS IN DATABASE - They are fully onboarded!
+          console.log('✅ Existing user found:', existingUser.username);
+          
+          // Also set localStorage so future checks are faster
+          localStorage.setItem(accessKey, 'true');
+          
+          // Trigger profile refresh so Navbar loads immediately
+          triggerProfileRefresh();
+          
+          setState({
+            hasAcceptedTerms: true,
+            hasCreatedProfile: true,
+            showTermsModal: false,
+            showUserCreationModal: false,
+            isLoadingProfile: false,
+          });
+          return;
+        }
+        
+        console.log('👋 User not found in database, checking access code...');
+        
+      } catch (err) {
+        console.error('Error checking user in database:', err);
+        // Continue to check access code
+      }
+
+      // 2. Check Access Code (Local Storage) - only for new users
       const hasAccess = localStorage.getItem(accessKey) === 'true';
 
       if (!hasAccess) {
+        // New user without access code - show terms modal
         setState({
           hasAcceptedTerms: false,
           hasCreatedProfile: false,
@@ -57,46 +97,14 @@ export function useOnboarding() {
         return;
       }
 
-      // 2. Check User Profile (Supabase)
-      try {
-        const { data, error } = await supabase
-          .from('users')
-          .select('wallet_address')
-          .eq('wallet_address', address)
-          .single();
-        
-        const hasProfile = !!data && !error;
-
-        if (hasProfile) {
-          // User is fully onboarded
-          setState({
-            hasAcceptedTerms: true,
-            hasCreatedProfile: true,
-            showTermsModal: false,
-            showUserCreationModal: false,
-            isLoadingProfile: false,
-          });
-        } else {
-          // User has access code but no profile -> Show Creation Modal
-          setState({
-            hasAcceptedTerms: true,
-            hasCreatedProfile: false,
-            showTermsModal: false,
-            showUserCreationModal: true,
-            isLoadingProfile: false,
-          });
-        }
-      } catch (err) {
-        console.error('Error checking user profile:', err);
-        // Fallback: show creation modal if we can't verify
-        setState({
-          hasAcceptedTerms: true,
-          hasCreatedProfile: false,
-          showTermsModal: false,
-          showUserCreationModal: true,
-          isLoadingProfile: false,
-        });
-      }
+      // 3. Has access code but no profile -> Show Creation Modal
+      setState({
+        hasAcceptedTerms: true,
+        hasCreatedProfile: false,
+        showTermsModal: false,
+        showUserCreationModal: true,
+        isLoadingProfile: false,
+      });
     };
 
     checkOnboardingStatus();

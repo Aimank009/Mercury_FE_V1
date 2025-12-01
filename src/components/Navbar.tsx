@@ -17,8 +17,19 @@ export default function Navbar({ onDepositClick, onEnableTrading }: NavbarProps)
   const { disconnect } = useDisconnect();
   const { sdk } = useSessionTrading();
   const { data: balance } = useBalance({ address });
-  const { balanceUSD: wrapperBalanceUSD, isLoading: isLoadingWrapper } = useWrapperBalance(address);
+  const { balanceUSD: wrapperBalanceUSD, isLoading: isLoadingWrapper, error: balanceError } = useWrapperBalance(address);
   const { profile } = useUserProfile();
+
+  // Debug logging for balance
+  useEffect(() => {
+    console.log('🎯 [Navbar] Balance debug:', {
+      address,
+      isConnected,
+      wrapperBalanceUSD,
+      isLoadingWrapper,
+      balanceError
+    });
+  }, [address, isConnected, wrapperBalanceUSD, isLoadingWrapper, balanceError]);
 
   const [showAccountMenu, setShowAccountMenu] = useState(false);
   const [hasActiveSession, setHasActiveSession] = useState(false);

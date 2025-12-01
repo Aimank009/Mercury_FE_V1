@@ -56,7 +56,7 @@ export async function fetchAllUsersBets(
       .select('*')
       .gte('timeperiod_id', startTimeperiodId.toString())
       .lte('timeperiod_id', endTimeperiodId.toString())
-      .order('created_at', { ascending: false});
+      .order('created_at', { ascending: true});
 
     if (error) {
       console.error('❌ Error fetching all users bets:', error);

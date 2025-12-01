@@ -7,54 +7,92 @@ interface BalanceData {
   balanceUSD: number;
 }
 
-// Fetch wrapper balance from Supabase
+// Fetch wrapper balance from Supabase final_balance table
 async function fetchWrapperBalance(userAddress: string): Promise<BalanceData> {
   if (!userAddress) {
     return { balance: 0, balanceUSD: 0 };
   }
 
-  const normalizedAddress = userAddress.toLowerCase();
-  console.log('💰 [useWrapperBalance] Fetching balance for address:', normalizedAddress);
+  console.log('💰 [useWrapperBalance] Fetching balance for address:', userAddress);
 
-  // Add timeout detection
-  const queryPromise = supabase
-    .from('final_balance')
-    .select('new_balance, timestamp')
-    .ilike('user_address', normalizedAddress)
-    .order('timestamp', { ascending: false })
-    .limit(1);
+  try {
+    // First try exact match with original address (mixed case as stored in DB)
+    let { data, error } = await supabase
+      .from('final_balance')
+      .select('*')
+      .eq('user_address', userAddress)
+      .order('timestamp', { ascending: false })
+      .limit(1);
 
-  const timeoutPromise = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error('Balance query timeout after 5 seconds')), 5000)
-  );
+    console.log('💰 [useWrapperBalance] Exact match result:', { data, error });
 
-  const queryResult = await Promise.race([queryPromise, timeoutPromise]) as any;
-  const { data, error: supabaseError } = queryResult;
+    // If no results, try with lowercase
+    if ((!data || data.length === 0) && !error) {
+      const result = await supabase
+        .from('final_balance')
+        .select('*')
+        .ilike('user_address', userAddress.toLowerCase())
+        .order('timestamp', { ascending: false })
+        .limit(1);
+      
+      data = result.data;
+      error = result.error;
+      console.log('💰 [useWrapperBalance] ilike lowercase result:', { data, error });
+    }
 
-  if (supabaseError) {
-    console.error('❌ Supabase error:', supabaseError);
+    // If still no results, try pattern match
+    if ((!data || data.length === 0) && !error) {
+      // Get the last 8 characters of the address for partial match
+      const addressSuffix = userAddress.slice(-8);
+      const result = await supabase
+        .from('final_balance')
+        .select('*')
+        .ilike('user_address', `%${addressSuffix}`)
+        .order('timestamp', { ascending: false })
+        .limit(10);
+      
+      if (result.data && result.data.length > 0) {
+        // Filter to find exact match (case-insensitive)
+        const match = result.data.find(r => 
+          r.user_address.toLowerCase() === userAddress.toLowerCase()
+        );
+        if (match) {
+          data = [match];
+          console.log('💰 [useWrapperBalance] Found via suffix match:', match);
+        }
+      }
+    }
+
+    if (error) {
+      console.error('❌ Supabase error:', error);
+      return { balance: 0, balanceUSD: 0 };
+    }
+
+    if (!data || data.length === 0) {
+      console.log('💰 No balance record found for:', userAddress);
+      return { balance: 0, balanceUSD: 0 };
+    }
+
+    const latestRecord = data[0];
+    console.log('💰 Latest record:', latestRecord);
+    
+    const balanceValue = latestRecord.new_balance || latestRecord.balance || '0';
+    const balanceRaw = BigInt(balanceValue);
+    const balanceUSDValue = Number(balanceRaw) / 1e6;
+
+    console.log('💰 ✅ BALANCE LOADED:', {
+      raw: balanceValue,
+      usd: balanceUSDValue
+    });
+
+    return {
+      balance: Number(balanceRaw),
+      balanceUSD: balanceUSDValue,
+    };
+  } catch (err) {
+    console.error('❌ Exception fetching balance:', err);
     return { balance: 0, balanceUSD: 0 };
   }
-
-  if (!data || data.length === 0) {
-    console.log('💰 No balance record found for address:', normalizedAddress);
-    return { balance: 0, balanceUSD: 0 };
-  }
-
-  const latestRecord = data[0];
-  const balanceRaw = BigInt(latestRecord.new_balance);
-  const balanceUSDValue = Number(balanceRaw) / 1e6;
-
-  console.log('💰 ✅ BALANCE LOADED:', {
-    raw: latestRecord.new_balance,
-    usd: balanceUSDValue,
-    timestamp: latestRecord.timestamp
-  });
-
-  return {
-    balance: Number(balanceRaw),
-    balanceUSD: balanceUSDValue,
-  };
 }
 
 /**
@@ -74,18 +112,18 @@ export function useWrapperBalance(userAddress: string | undefined) {
     queryKey: ['wrapperBalance', userAddress?.toLowerCase()],
     queryFn: () => fetchWrapperBalance(userAddress!),
     enabled: !!userAddress,
-    staleTime: 30_000, // Consider data fresh for 30 seconds
-    gcTime: 5 * 60 * 1000, // Keep in cache for 5 minutes
+    staleTime: 30_000,
+    gcTime: 5 * 60 * 1000,
     retry: 1,
     retryDelay: 1000,
   });
 
-  // Set up real-time subscription
+  // Set up real-time subscription for final_balance table
   useEffect(() => {
     if (!userAddress || !supabase) return;
 
     const normalizedAddress = userAddress.toLowerCase();
-    console.log('💰 Setting up DIRECT Supabase real-time for balance...');
+    console.log('💰 Setting up Supabase real-time for final_balance...');
 
     const balanceChannel = supabase
       .channel('final_balance_changes')
@@ -94,15 +132,14 @@ export function useWrapperBalance(userAddress: string | undefined) {
         schema: 'public',
         table: 'final_balance',
       }, (payload) => {
-        console.log('💰 ⚡ DIRECT Supabase real-time event:', payload);
+        console.log('💰 ⚡ Balance change event:', payload);
         
-        // Check if this update is for the current user
         if (payload.new && (payload.new as any).user_address?.toLowerCase() === normalizedAddress) {
-          console.log('💰 ⚡⚡ INSTANT BALANCE UPDATE for user!', payload.new);
-          const newBalance = BigInt((payload.new as any).new_balance);
+          console.log('💰 ⚡⚡ INSTANT BALANCE UPDATE!', payload.new);
+          const balanceValue = (payload.new as any).new_balance || (payload.new as any).balance || '0';
+          const newBalance = BigInt(balanceValue);
           const balanceUSDValue = Number(newBalance) / 1e6;
           
-          // Update TanStack Query cache immediately
           queryClient.setQueryData<BalanceData>(
             ['wrapperBalance', normalizedAddress],
             {
@@ -113,7 +150,7 @@ export function useWrapperBalance(userAddress: string | undefined) {
         }
       })
       .subscribe((status) => {
-        console.log('💰 Supabase real-time subscription status:', status);
+        console.log('💰 final_balance subscription status:', status);
       });
 
     return () => {
@@ -123,8 +160,8 @@ export function useWrapperBalance(userAddress: string | undefined) {
   }, [userAddress, queryClient]);
 
   return {
-    balance: data.balance,
-    balanceUSD: data.balanceUSD,
+    balance: data?.balance ?? 0,
+    balanceUSD: data?.balanceUSD ?? 0,
     isLoading,
     error: error ? (error as Error).message : null,
     refetch,

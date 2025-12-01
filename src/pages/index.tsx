@@ -96,17 +96,6 @@ const Home: NextPage = () => {
         />
         <link href="/favicon.ico" rel="icon" />
       </Head>
-
-      <Navbar 
-        onDepositClick={() => setShowDepositModal(true)}
-        onEnableTrading={async () => {
-          const success = await createTradingSession();
-          if (success) {
-            setShowTradingEnabledPopup(true);
-          }
-          return !!success;
-        }}
-      />
       
       {/* Order Result Notification */}
       {lastOrderResult &&  !lastOrderResult.success &&  (
@@ -141,66 +130,95 @@ const Home: NextPage = () => {
       {/* Only show trading interface if user has completed onboarding OR is not connected */}
       {(!isConnected || canAccessApp) && (
         <>
-          <div className={styles.tradingContainer}>
-            <TradingInfo 
-              isScrolled={isScrolled}
-              onRecenter={() => setRecenterTrigger(prev => prev + 1)}
+          {/* Trading Section - exactly 100vh */}
+          <div className={styles.tradingSection}>
+            <Navbar 
+              onDepositClick={() => setShowDepositModal(true)}
+              onEnableTrading={async () => {
+                const success = await createTradingSession();
+                if (success) {
+                  setShowTradingEnabledPopup(true);
+                }
+                return !!success;
+              }}
             />
-            <main className={styles.main}>
-              <div className={styles.chartSection}>
-                <TradingChart 
-                  priceStep={PRICE_STEP}
-                  priceDecimals={PRICE_DECIMALS}
-                  isPlacingOrder={isPlacingOrder}
-                  onScrollStateChange={setIsScrolled}
-                  recenterTrigger={recenterTrigger}
-                  onCellSelect={async (timeOffset, priceLevel) => {
-                    // if (isPlacingOrder) {
-                    //   console.log('Order already in progress, please wait...');
-                    //   return { success: false, error: 'Order already in progress' };
-                    // }
-                    
-                    try {
-                      console.log('🎯 Placing order for cell:', { timeOffset, priceLevel });
-                      const result = await placeOrderFromCell(timeOffset, priceLevel, 1); // $1 default amount
+            <div className={styles.tradingContainer}>
+              <TradingInfo 
+                isScrolled={isScrolled}
+                onRecenter={() => setRecenterTrigger(prev => prev + 1)}
+              />
+              <main className={styles.main}>
+                <div className={styles.chartSection}>
+                  <TradingChart 
+                    priceStep={PRICE_STEP}
+                    priceDecimals={PRICE_DECIMALS}
+                    isPlacingOrder={isPlacingOrder}
+                    onScrollStateChange={setIsScrolled}
+                    recenterTrigger={recenterTrigger}
+                    onCellSelect={async (timeOffset, priceLevel) => {
+                      // if (isPlacingOrder) {
+                      //   console.log('Order already in progress, please wait...');
+                      //   return { success: false, error: 'Order already in progress' };
+                      // }
                       
-                      // Check if order failed due to no session
-                      if (!result.success && result.isSessionError) {
-                        console.log('📢 No session - showing prompt and deselecting cell');
-                        setShowSessionPrompt(true); // Show the popup
+                      try {
+                        console.log('🎯 Placing order for cell:', { timeOffset, priceLevel });
+                        const result = await placeOrderFromCell(timeOffset, priceLevel, 1); // $1 default amount
                         
-                        // Deselect the cell by dispatching a custom event
-                        window.dispatchEvent(new CustomEvent('deselectCell', {
-                          detail: { timeOffset, priceLevel }
-                        }));
+                        // Check if order failed due to no session
+                        if (!result.success && result.isSessionError) {
+                          console.log('📢 No session - showing prompt and deselecting cell');
+                          setShowSessionPrompt(true); // Show the popup
+                          
+                          // Deselect the cell by dispatching a custom event
+                          window.dispatchEvent(new CustomEvent('deselectCell', {
+                            detail: { timeOffset, priceLevel }
+                          }));
+                        }
+                        
+                        return { 
+                          success: result.success, 
+                          orderId: result.txHash, 
+                          error: result.error 
+                        };
+                      } catch (error) {
+                        console.error('❌ Error placing order:', error);
+                        return { 
+                          success: false, 
+                          error: error instanceof Error ? error.message : 'Unknown error' 
+                        };
                       }
-                      
-                      return { 
-                        success: result.success, 
-                        orderId: result.txHash, 
-                        error: result.error 
-                      };
-                    } catch (error) {
-                      console.error('❌ Error placing order:', error);
-                      return { 
-                        success: false, 
-                        error: error instanceof Error ? error.message : 'Unknown error' 
-                      };
-                    }
-                  }}
-                />
-              </div>
-            </main>
+                    }}
+                  />
+                </div>
+              </main>
+            </div>
           </div>
+          
+          {/* Positions Section - exactly 100vh */}
+          <div className={styles.positionsSection}>
           <Positions />
+          </div>
         </>
       )}
 
       {/* Show a placeholder message if user is connected but hasn't completed onboarding */}
       {isConnected && !canAccessApp && !showTermsModal && !showUserCreationModal && (
-        <div className={styles.placeholderMessage}>
-          <h2>Welcome to Mercury Trade</h2>
-          <p>Please complete the onboarding to start trading.</p>
+        <div className={styles.tradingSection}>
+          <Navbar 
+            onDepositClick={() => setShowDepositModal(true)}
+            onEnableTrading={async () => {
+              const success = await createTradingSession();
+              if (success) {
+                setShowTradingEnabledPopup(true);
+              }
+              return !!success;
+            }}
+          />
+          <div className={styles.placeholderMessage}>
+            <h2>Welcome to Mercury Trade</h2>
+            <p>Please complete the onboarding to start trading.</p>
+          </div>
         </div>
       )}
 

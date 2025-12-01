@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { generateAvatarImage } from '../lib/avatarGenerator';
 import { useDisconnect } from 'wagmi';
+import { triggerProfileRefresh } from '../hooks/useUserProfile';
 
 interface UserCreationModalProps {
   isOpen: boolean;
@@ -16,13 +17,64 @@ export default function UserCreationModal({ isOpen, onSuccess, walletAddress }: 
   const [isGeneratingAvatar, setIsGeneratingAvatar] = useState(false);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [error, setError] = useState('');
+  const [isCheckingExistingUser, setIsCheckingExistingUser] = useState(true);
   const { disconnect } = useDisconnect();
 
+  // Check if user already exists in database - if so, skip the modal
   useEffect(() => {
-    if (isOpen && walletAddress) {
+    const checkExistingUser = async () => {
+      if (!isOpen || !walletAddress) {
+        setIsCheckingExistingUser(false);
+        return;
+      }
+
+      try {
+        console.log('🔍 UserCreationModal: Checking for existing user:', walletAddress);
+        
+        const { data: existingUser, error: fetchError } = await supabase
+          .from('users')
+          .select('wallet_address, username')
+          .ilike('wallet_address', walletAddress) // Case-insensitive!
+          .maybeSingle();
+
+        if (fetchError) {
+          console.error('Error checking existing user:', fetchError);
+          setIsCheckingExistingUser(false);
+          return;
+        }
+
+        if (existingUser) {
+          // ✅ USER EXISTS - Skip modal entirely!
+          console.log('✅ UserCreationModal: Existing user found, skipping modal:', existingUser.username);
+          
+          // Update localStorage
+          localStorage.setItem(`mercury_access_granted_${walletAddress.toLowerCase()}`, 'true');
+          
+          // Trigger profile refresh so Navbar loads the profile
+          triggerProfileRefresh();
+          
+          // Call onSuccess to close modal and proceed
+          onSuccess();
+          return;
+        }
+        
+        console.log('👋 UserCreationModal: New user, showing form');
+        setIsCheckingExistingUser(false);
+        
+      } catch (err) {
+        console.error('Exception checking existing user:', err);
+        setIsCheckingExistingUser(false);
+      }
+    };
+
+    checkExistingUser();
+  }, [isOpen, walletAddress, onSuccess]);
+
+  useEffect(() => {
+    if (isOpen && walletAddress && !isCheckingExistingUser) {
       generateAvatar();
     }
-  }, [isOpen, walletAddress]);
+  }, [isOpen, walletAddress, isCheckingExistingUser]);
 
   const generateAvatar = async () => {
     setIsGeneratingAvatar(true);
@@ -91,12 +143,16 @@ export default function UserCreationModal({ isOpen, onSuccess, walletAddress }: 
         if (insertError) throw insertError;
       }
 
+      // Trigger profile refresh so Navbar updates immediately
+      triggerProfileRefresh();
+      
       onSuccess();
     } catch (err: any) {
       console.error('Error creating profile:', err);
       if (err.code === '23505') { // Unique violation
         setError('This wallet is already registered.');
-        // If already registered, maybe just log them in?
+        // If already registered, trigger refresh and log them in
+        triggerProfileRefresh();
         onSuccess();
       } else {
         setError('Failed to create profile. Please try again.');
@@ -105,6 +161,15 @@ export default function UserCreationModal({ isOpen, onSuccess, walletAddress }: 
       setIsLoading(false);
     }
   };
+
+  // Show loading while checking for existing user
+  if (isCheckingExistingUser && isOpen) {
+    return (
+      <div className="fixed inset-0 bg-black/40 backdrop-blur-[12px] flex items-center justify-center z-[10000]">
+        <div className="text-white text-sm font-mono">Checking account...</div>
+      </div>
+    );
+  }
 
   if (!isOpen) return null;
 

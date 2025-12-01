@@ -394,7 +394,7 @@ export class DepositWithdrawSDK {
     } else if (lastError.code === 'CALL_EXCEPTION') {
       throw new Error('Contract call failed. Most likely cause: USDTO tokens not approved. Please click "Debug Contract" button to check approval status, then approve USDTO if needed.');
     } else {
-      throw new Error(`USDTO deposit failed: ${lastError.message}`);
+      throw new Error(`${lastError.message}`);
     }
   }
 

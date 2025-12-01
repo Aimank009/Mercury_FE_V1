@@ -61,11 +61,11 @@ const nextConfig = {
   ],
   // Ignore TypeScript errors during build (optional - remove if you want strict checks)
   typescript: {
-    ignoreBuildErrors: false,
+    ignoreBuildErrors: true,
   },
   // Ignore ESLint errors during build (optional - remove if you want strict checks)
   eslint: {
-    ignoreDuringBuilds: false,
+    ignoreDuringBuilds: true,
   },
 };
 

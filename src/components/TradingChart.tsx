@@ -58,6 +58,7 @@ export default function TradingChart({
   
   // Track last processed settlement to prevent duplicates
   const processedSettlementsRef = useRef<Set<string>>(new Set());
+  const processedFeedSettlementsRef = useRef<Set<string>>(new Set());
   const [, forceUpdate] = useState({});
   
   // Check user's bets against settlements by querying Supabase for exact bet data
@@ -75,7 +76,6 @@ export default function TradingChart({
       
       // Mark this timeperiod as processed
       processedSettlementsRef.current.add(settlementTimeperiodId);
-      // console.log(`✅ Processing NEW settlement for timeperiod ${settlementTimeperiodId}`);
       
       const settlementTimeperiodIdNum = parseInt(settlementTimeperiodId);
       
@@ -85,16 +85,97 @@ export default function TradingChart({
       
       console.log(`\n🏆 Settlement received: timeperiod ${settlementTimeperiodIdNum}, price range $${settlementPriceMin.toFixed(priceDecimals)} - $${settlementPriceMax.toFixed(priceDecimals)}`);
       
+      // FIRST: Check local selectedCellsRef for matching bets (INSTANT - no DB query needed)
+      let foundLocalBets = false;
+      const localUpdates: Array<{cellKey: string; status: string; bet: any}> = [];
+      
+      selectedCellsRef.current.forEach((cell, cellKey) => {
+        // Calculate timeperiod for this cell
+        const cellTimeperiodId = Math.floor((cell.t + 0.0001) / GRID_SEC) * GRID_SEC;
+        
+        if (cellTimeperiodId === settlementTimeperiodIdNum && (cell.status === 'confirmed' || cell.status === 'pending')) {
+          foundLocalBets = true;
+          
+          const priceMin = cell.priceMin;
+          const priceMax = cell.priceMax;
+          
+          // Check if settlement price range OVERLAPS with bet's price range
+          const isWin = settlementPriceMin < priceMax && settlementPriceMax > priceMin;
+          const newStatus = isWin ? 'won' : 'lost';
+          
+          console.log(`  📊 Local bet found: ${cellKey} - ${newStatus.toUpperCase()}`);
+          console.log(`     Bet range: $${priceMin?.toFixed(3)} - $${priceMax?.toFixed(3)}`);
+          console.log(`     Settlement range: $${settlementPriceMin.toFixed(3)} - $${settlementPriceMax.toFixed(3)}`);
+          
+          // Update cell status IMMEDIATELY
+          cell.status = newStatus;
+          cell.timestamp = Date.now();
+          
+          // Update multiplier: keep if win, set to 0 if loss
+          if (!isWin) {
+            cell.multiplier = 0;
+            cell.payout = 0;
+          }
+          
+          // Play sound
+          if (isWin) {
+            soundsRef.current.playWin();
+          } else {
+            soundsRef.current.playLoss();
+          }
+          
+          localUpdates.push({ cellKey, status: newStatus, bet: cell });
+        }
+      });
+      
+      // Force re-render IMMEDIATELY if we found local bets
+      if (foundLocalBets) {
+        console.log(`  ✅ Updated ${localUpdates.length} local bets instantly`);
+        forceUpdate({});
+        
+        // Update database in BACKGROUND (don't wait)
+        localUpdates.forEach(({ cellKey, status, bet }) => {
+          if (bet.orderId) {
+            const settlementPriceMiddle = (settlementPriceMin + settlementPriceMax) / 1e8;
+            const finalMultiplier = status === 'won' ? (bet.multiplier || 0) : 0;
+            
+            supabase
+              .from('bet_placed_with_session')
+              .update({ 
+                status: status, 
+                settled_at: new Date().toISOString(),
+                settlement_price: Math.floor((settlementPriceMin + settlementPriceMax) / 2 * 1e8),
+                multiplier: finalMultiplier
+              })
+              .eq('event_id', bet.orderId)
+              .then(({ error }) => {
+                if (error) {
+                  console.error(`❌ Error updating bet ${bet.orderId}:`, error);
+                } else {
+                  console.log(`✅ Database updated for bet ${bet.orderId}`);
+                }
+              });
+          }
+        });
+        
+        // Trigger positions table refresh
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('positionsUpdated', {
+            detail: { timeperiodId: settlementTimeperiodIdNum }
+          }));
+        }
+        
+        return; // Don't need to query database since we handled local bets
+      }
+      
+      // FALLBACK: Query database if no local bets found (for restored bets from page reload)
       try {
-        // Query user's bets for this timeperiod
         const { data: userBets, error } = await supabase
           .from('bet_placed_with_session')
           .select('*')
           .ilike('user_address', address)
           .eq('timeperiod_id', settlementTimeperiodId)
-          .in('status', ['pending', 'confirmed']); // Only check unsettled bets
-        
-        // console.log(`📊 Query result: found ${userBets?.length || 0} unsettled bet(s)`);
+          .in('status', ['pending', 'confirmed']);
         
         if (error) {
           console.error('❌ Error querying user bets:', error);
@@ -106,53 +187,34 @@ export default function TradingChart({
           return;
         }
         
-        // Process each bet and update database
+        console.log(`  📊 Found ${userBets.length} bets in database (fallback path)`);
+        
+        // Process each bet from database
         const updatePromises = userBets.map(async (bet) => {
           const priceMin = parseFloat(bet.price_min) / 1e8;
           const priceMax = parseFloat(bet.price_max) / 1e8;
           
-          // Check if settlement price range OVERLAPS with bet's price range
-          // A bet wins if there's any overlap between [settlementPriceMin, settlementPriceMax] and [priceMin, priceMax]
-          // Overlap exists if: settlementPriceMin < priceMax && settlementPriceMax > priceMin
           const isWin = settlementPriceMin < priceMax && settlementPriceMax > priceMin;
           const newStatus = isWin ? 'won' : 'lost';
           
-          // Calculate cell key to find the bet in UI
           const cellTime = settlementTimeperiodIdNum + 2.5;
           const cellPriceLevel = priceMax;
           const cellKey = `${Math.round(cellTime * 10)}_${cellPriceLevel.toFixed(priceDecimals)}`;
           
-          // Try to get multiplier from UI state (already stored when bet was placed)
-          const existingBet = selectedCellsRef.current.get(cellKey);
-          let calculatedMultiplier = 0;
-          
-          if (existingBet && existingBet.multiplier) {
-            // Use the multiplier that was calculated when the bet was placed
-            calculatedMultiplier = existingBet.multiplier;
-            console.log(`  ✅ Using stored multiplier from UI: ${calculatedMultiplier.toFixed(2)}X`);
-          } else {
-            // Fallback: try to get from database or calculate (may be inaccurate after grid starts)
-            calculatedMultiplier = bet.multiplier || 0;
-            console.log(`  ⚠️ Using multiplier from database: ${calculatedMultiplier.toFixed(2)}X`);
-          }
-          
-          // Determine multiplier: keep calculated multiplier if win, set to 0 if loss
+          const calculatedMultiplier = bet.multiplier || 0;
           const finalMultiplier = isWin ? calculatedMultiplier : 0;
           
           console.log(`  📊 Bet ${bet.event_id.substring(0, 10)}... - ${newStatus.toUpperCase()}`);
-          console.log(`     Original multiplier: ${calculatedMultiplier.toFixed(2)}X`);
-          console.log(`     Final multiplier (${isWin ? 'WIN' : 'LOSS'}): ${finalMultiplier.toFixed(2)}X`);
           
-          // Update database with settlement result
-          // Store the middle price of the settlement range as the settlement_price for backward compatibility
+          // Update database
           const settlementPriceMiddle = (settlementPriceMin + settlementPriceMax) / 2;
           const { error: updateError } = await supabase
             .from('bet_placed_with_session')
             .update({ 
               status: newStatus, 
               settled_at: new Date().toISOString(),
-              settlement_price: Math.floor(settlementPriceMiddle * 1e8), // Store middle of range for backward compatibility
-              multiplier: finalMultiplier // Keep multiplier if win, 0 if loss
+              settlement_price: Math.floor(settlementPriceMiddle * 1e8),
+              multiplier: finalMultiplier
             })
             .eq('event_id', bet.event_id);
           
@@ -161,56 +223,25 @@ export default function TradingChart({
             return null;
           }
           
-          console.log(`✅ Database updated successfully for bet ${bet.event_id}`);
+          // Add to UI
+          const betInfo = calculateCellBetInfo(cellTime, cellPriceLevel);
+          selectedCellsRef.current.set(cellKey, {
+            t: cellTime,
+            priceLevel: cellPriceLevel,
+            status: newStatus,
+            orderId: bet.event_id || bet.grid_id,
+            priceMin: priceMin,
+            priceMax: priceMax,
+            timestamp: Date.now(),
+            multiplier: isWin ? betInfo.multiplier : 0,
+            betAmount: betInfo.betAmount,
+            payout: isWin ? betInfo.payout : 0
+          });
           
-          // Trigger positions table refresh
-          if (typeof window !== 'undefined') {
-            try {
-              window.dispatchEvent(new CustomEvent('positionsUpdated', {
-                detail: { eventId: bet.event_id, status: newStatus, multiplier: finalMultiplier }
-              }));
-              console.log('📢 Dispatched positionsUpdated event');
-            } catch (dispatchError) {
-              console.error('❌ Error dispatching event:', dispatchError);
-            }
-          }
-          
-          // Update UI (reuse cellKey and existingBet from above)
-          if (existingBet) {
-            existingBet.status = newStatus;
-            existingBet.timestamp = Date.now();
-            if (isWin) {
-              soundsRef.current.playWin();
-              console.log(`  ✅ WIN! Bet ${bet.event_id} updated in database`);
-            } else {
-              soundsRef.current.playLoss();
-              console.log(`  ❌ LOSS! Bet ${bet.event_id} updated in database`);
-            }
+          if (isWin) {
+            soundsRef.current.playWin();
           } else {
-            // Bet not in UI yet - add it with settled status
-            // Calculate multiplier for restored bet
-            const betInfo = calculateCellBetInfo(cellTime, cellPriceLevel);
-            
-            selectedCellsRef.current.set(cellKey, {
-              t: cellTime,
-              priceLevel: cellPriceLevel,
-              status: newStatus,
-              orderId: bet.event_id || bet.grid_id,
-              priceMin: priceMin,
-              priceMax: priceMax,
-              timestamp: Date.now(),
-              multiplier: isWin ? betInfo.multiplier : 0, // Keep multiplier if win, 0 if loss
-              betAmount: betInfo.betAmount,
-              payout: isWin ? betInfo.payout : 0
-            });
-            
-            if (isWin) {
-              soundsRef.current.playWin();
-              console.log(`  ✅ WIN! (restored) Bet ${bet.event_id} updated in database`);
-            } else {
-              soundsRef.current.playLoss();
-              console.log(`  ❌ LOSS! (restored) Bet ${bet.event_id} updated in database`);
-            }
+            soundsRef.current.playLoss();
           }
           
           return { cellKey, status: newStatus };
@@ -218,7 +249,13 @@ export default function TradingChart({
         
         await Promise.all(updatePromises);
         
-        // Trigger re-render
+        // Trigger positions table refresh
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('positionsUpdated', {
+            detail: { timeperiodId: settlementTimeperiodIdNum }
+          }));
+        }
+        
         forceUpdate({});
         
       } catch (error) {
@@ -299,106 +336,7 @@ export default function TradingChart({
     checkAllBets();
   }, [settlementsMessage, forceUpdate]);
 
-  // Real-time activity feed: Track settlements (wins)
-  useEffect(() => {
-    if (!settlementsMessage || !address) return;
-    
-    const settlementTimeperiodId = settlementsMessage.timeperiod_id;
-    
-    // Extract price range from settlement message (new format: price_min and price_max)
-    const settlementPriceMin = parseFloat(settlementsMessage.price_min || settlementsMessage.price) / 1e8;
-    const settlementPriceMax = parseFloat(settlementsMessage.price_max || settlementsMessage.price) / 1e8;
-    
-    // Query all bets for this timeperiod to show wins in activity feed
-    const updateActivityFeedFromSettlement = async () => {
-      try {
-        const { data: allBets } = await supabase
-          .from('bet_placed_with_session')
-          .select('user_address, amount, multiplier, price_min, price_max')
-          .eq('timeperiod_id', settlementTimeperiodId);
-        
-        if (!allBets || allBets.length === 0) return;
-        
-        const newActivities: typeof activityFeed = [];
-        
-        // Process each bet to find winners
-        allBets.forEach((bet) => {
-          const priceMin = parseFloat(bet.price_min) / 1e8;
-          const priceMax = parseFloat(bet.price_max) / 1e8;
-          
-          // Check if settlement price range OVERLAPS with bet's price range
-          // A bet wins if there's any overlap between [settlementPriceMin, settlementPriceMax] and [priceMin, priceMax]
-          // Overlap exists if: settlementPriceMin < priceMax && settlementPriceMax > priceMin
-          const isWin = settlementPriceMin < priceMax && settlementPriceMax > priceMin;
-          
-          if (isWin) {
-            const amount = parseFloat(bet.amount) / 1e6;
-            const multiplier = bet.multiplier ? parseFloat(bet.multiplier.toString()) : 0;
-            const isYou = bet.user_address.toLowerCase() === address.toLowerCase();
-            const username = isYou ? undefined : bet.user_address.slice(0, 6);
-            
-            newActivities.push({
-              id: `${bet.user_address}_${settlementTimeperiodId}_${Date.now()}_${Math.random()}`,
-              type: 'won',
-              username,
-              amount,
-              multiplier,
-              isYou,
-              timestamp: Date.now(),
-            });
-          }
-        });
-        
-        // Add pool addition entry (sum of all bet amounts for this settlement)
-        const totalPool = allBets.reduce((sum, bet) => sum + parseFloat(bet.amount) / 1e6, 0);
-        if (totalPool > 0) {
-          newActivities.push({
-            id: `pool_${settlementTimeperiodId}_${Date.now()}_${Math.random()}`,
-            type: 'pool_added',
-            amount: totalPool,
-            isYou: false,
-            timestamp: Date.now(),
-          });
-        }
-        
-        // Add new activities to the top of the feed
-        if (newActivities.length > 0) {
-          // Mark new items as highlighted
-          const highlightedActivities = newActivities.map(activity => ({
-            ...activity,
-            isNew: true
-          }));
-          
-          setActivityFeed((prev) => {
-            const combined = [...highlightedActivities, ...prev];
-            return combined.slice(0, 20); // Keep last 20 items
-          });
-          
-          // Auto-scroll to top to show new items
-          setTimeout(() => {
-            if (activityFeedRef.current) {
-              activityFeedRef.current.scrollTop = 0;
-            }
-          }, 10);
-          
-          // Remove highlight after 3 seconds
-          setTimeout(() => {
-            setActivityFeed((prev) => 
-              prev.map(item => 
-                highlightedActivities.some(na => na.id === item.id) 
-                  ? { ...item, isNew: false }
-                  : item
-              )
-            );
-          }, 3000);
-        }
-      } catch (error) {
-        console.error('Error updating activity feed from settlement:', error);
-      }
-    };
-    
-    updateActivityFeedFromSettlement();
-  }, [settlementsMessage, address]);
+
 
   // Periodically clean up stale settlement highlights
   useEffect(() => {
@@ -543,23 +481,220 @@ export default function TradingChart({
     min: (wsPrice > 0 ? wsPrice : (initialBasePrice || 38.12)) - (100 * priceStep),
     max: (wsPrice > 0 ? wsPrice : (initialBasePrice || 38.12)) + (100 * priceStep)
   });
+
+  // Update price range when price changes significantly to ensure we fetch relevant bets
+  useEffect(() => {
+    if (wsPrice > 0) {
+      setPriceRange(prev => {
+        // Only update if price has moved significantly (e.g. more than 20 steps) to avoid too many re-fetches
+        const buffer = 50 * priceStep;
+        if (wsPrice < prev.min + buffer || wsPrice > prev.max - buffer) {
+          return {
+            min: wsPrice - (100 * priceStep),
+            max: wsPrice + (100 * priceStep)
+          };
+        }
+        return prev;
+      });
+    }
+  }, [wsPrice, priceStep]);
   
   // Update sound functions ref when they change
   useEffect(() => {
     soundsRef.current = { playClick, playWin, playLoss };
   }, [playClick, playWin, playLoss]);
   
+  // Stable time for query to prevent constant refetching/cache invalidation
+  const [queryTime, setQueryTime] = useState(Math.floor(Date.now() / 1000));
+  
+  // Update query time every minute to keep window moving
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setQueryTime(Math.floor(Date.now() / 1000));
+    }, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
   const { 
     bets: realtimeBets, 
     isLoading: betsLoading,
     error: wsError 
   } = useAllUsersBetsQuery({
-    currentTime: Math.floor(Date.now() / 1000),
+    currentTime: queryTime,
     priceMin: priceRange.min,
     priceMax: priceRange.max,
     timeWindowSeconds: 300,
     enabled: true // Enabled for real-time updates
   });
+
+  // Real-time activity feed: Track settlements (wins)
+  useEffect(() => {
+    if (!settlementsMessage || !address) return;
+    
+    const settlementTimeperiodId = settlementsMessage.timeperiod_id;
+    
+    // Extract price range from settlement message (new format: price_min and price_max)
+    const settlementPriceMin = parseFloat(settlementsMessage.price_min || settlementsMessage.price) / 1e8;
+    const settlementPriceMax = parseFloat(settlementsMessage.price_max || settlementsMessage.price) / 1e8;
+    
+    // Query all bets for this timeperiod to show wins in activity feed
+    const updateActivityFeedFromSettlement = async () => {
+      // Skip if already processed for feed
+      if (processedFeedSettlementsRef.current.has(settlementTimeperiodId)) return;
+
+      const settlementTimeperiodIdNum = parseInt(settlementTimeperiodId);
+      
+      console.log(`🔍 Checking feed for settlement ${settlementTimeperiodIdNum}. Realtime bets count: ${realtimeBets?.length || 0}`);
+
+      // 1. Try local realtimeBets first (INSTANT)
+      let sourceBets: any[] = realtimeBets.filter(bet => {
+        const betTimeperiodId = typeof bet.timeperiod_id === 'string' ? parseInt(bet.timeperiod_id) : bet.timeperiod_id;
+        return betTimeperiodId === settlementTimeperiodIdNum;
+      });
+      
+      let usedFallback = false;
+
+      // 2. If no local bets found, fallback to Supabase query (RELIABLE)
+      if (!sourceBets || sourceBets.length === 0) {
+        console.log(`⚠️ No local bets found for settlement ${settlementTimeperiodIdNum}, fetching from DB...`);
+        try {
+          const { data: dbBets } = await supabase
+            .from('bet_placed_with_session')
+            .select('user_address, amount, multiplier, price_min, price_max, timeperiod_id')
+            .eq('timeperiod_id', settlementTimeperiodId);
+            
+          if (dbBets && dbBets.length > 0) {
+            console.log(`✅ Fetched ${dbBets.length} bets from DB`);
+            sourceBets = dbBets;
+            usedFallback = true;
+          } else {
+             console.log(`❌ No bets found in DB either for ${settlementTimeperiodIdNum}`);
+             // Don't return here, just let it fall through to empty check
+          }
+        } catch (err) {
+          console.error("Error fetching bets fallback:", err);
+        }
+      }
+
+      if (!sourceBets || sourceBets.length === 0) {
+        return;
+      }
+
+      console.log(`✅ Processing ${sourceBets.length} bets for feed (Fallback: ${usedFallback})`);
+
+      // Mark as processed
+      processedFeedSettlementsRef.current.add(settlementTimeperiodId);
+      
+      // Filter to only YOUR bets
+      const yourBets = sourceBets.filter(bet => 
+        address && bet.user_address.toLowerCase() === address.toLowerCase()
+      );
+      
+      if (yourBets.length === 0) {
+        console.log(`ℹ️ No bets from current user in this settlement`);
+        return;
+      }
+      
+      console.log(`👤 Found ${yourBets.length} of YOUR bets in this settlement`);
+        
+      const newActivities: typeof activityFeed = [];
+      
+      yourBets.forEach(bet => {
+        let betPriceMin: number;
+        let betPriceMax: number;
+        let amount: number;
+        let multiplier: number;
+
+        if (usedFallback) {
+          // Handle DB format (strings, scaled by 1e8 for price, 1e6 for amount)
+          betPriceMin = parseFloat(bet.price_min) / 1e8;
+          betPriceMax = parseFloat(bet.price_max) / 1e8;
+          amount = parseFloat(bet.amount) / 1e6; // Convert from USDC precision to dollars
+          multiplier = bet.multiplier ? parseFloat(bet.multiplier.toString()) : 1.5; // Default multiplier if missing
+        } else {
+          // Handle UserBet format from realtimeBets (already in dollars for amount)
+          // Calculate price range from price_level
+          betPriceMin = bet.price_level - priceStep / 2;
+          betPriceMax = bet.price_level + priceStep / 2;
+          // UserBet.amount is already in dollars (converted in useAllUsersBetsQuery)
+          amount = typeof bet.amount === 'string' ? parseFloat(bet.amount) : bet.amount;
+          multiplier = bet.multiplier ? parseFloat(bet.multiplier.toString()) : 1.5; // Default multiplier if missing
+        }
+        
+        console.log(`📊 Checking bet: price range [${betPriceMin.toFixed(3)}-${betPriceMax.toFixed(3)}] vs settlement [${settlementPriceMin.toFixed(3)}-${settlementPriceMax.toFixed(3)}], amount: $${amount.toFixed(2)}, multiplier: ${multiplier}`);
+        
+        // Check for overlap - if price ranges overlap, it's a WIN
+        const isWin = settlementPriceMin < betPriceMax && settlementPriceMax > betPriceMin;
+        const isYou = address && bet.user_address.toLowerCase() === address.toLowerCase();
+        const username = bet.user_address.slice(0, 6);
+
+        if (isWin) {
+          // User WON - show "@username won $payout"
+          const payout = amount * multiplier;
+          console.log(`🎉 Winner: ${isYou ? 'YOU' : '@' + username} won $${payout.toFixed(2)} (bet: $${amount.toFixed(2)} × ${multiplier.toFixed(1)}X)`);
+
+          newActivities.push({
+            id: `won_${bet.user_address}_${settlementTimeperiodId}_${Date.now()}_${Math.random()}`,
+            type: 'won',
+            username: isYou ? undefined : username,
+            amount: payout, // Show the PAYOUT (amount * multiplier)
+            multiplier,
+            isYou: !!isYou,
+            timestamp: Date.now(),
+          });
+        } else {
+          // User LOST - show "Added to pool $amount"
+          console.log(`💸 Lost bet added to pool: $${amount.toFixed(2)} from ${isYou ? 'YOU' : '@' + username}`);
+
+          newActivities.push({
+            id: `pool_${bet.user_address}_${settlementTimeperiodId}_${Date.now()}_${Math.random()}`,
+            type: 'pool_added',
+            username: isYou ? undefined : username,
+            amount: amount, // Show the bet amount that was lost
+            isYou: !!isYou,
+            timestamp: Date.now(),
+          });
+        }
+      });
+      
+      // Add new activities to the top of the feed
+      if (newActivities.length > 0) {
+        console.log(`📢 Adding ${newActivities.length} activities to feed:`, newActivities.map(a => `${a.type}: ${a.isYou ? 'YOU' : a.username} $${a.amount.toFixed(2)}`));
+        
+        // Mark new items as highlighted
+        const highlightedActivities = newActivities.map(activity => ({
+          ...activity,
+          isNew: true
+        }));
+        
+        setActivityFeed((prev) => {
+          const combined = [...highlightedActivities, ...prev];
+          console.log(`📋 Activity feed now has ${combined.length} items`);
+          return combined.slice(0, 20); // Keep last 20 items
+        });
+        
+        // Auto-scroll to top to show new items
+        setTimeout(() => {
+          if (activityFeedRef.current) {
+            activityFeedRef.current.scrollTop = 0;
+          }
+        }, 10);
+        
+        // Remove highlight after 3 seconds
+        setTimeout(() => {
+          setActivityFeed((prev) => 
+            prev.map(item => 
+              highlightedActivities.some(na => na.id === item.id) 
+                ? { ...item, isNew: false }
+                : item
+            )
+          );
+        }, 3000);
+      }
+    };
+    
+    updateActivityFeedFromSettlement();
+  }, [settlementsMessage, address, realtimeBets, priceStep]);
 
   // Chart configuration
   const DURATION = CHART_CONFIG.DURATION_SECONDS - 6; // Chart history duration (reduced by 6 seconds for better performance)
@@ -873,77 +1008,12 @@ export default function TradingChart({
     }
   }, [realtimeBets, address]); // Added address to dependencies
 
-  // Real-time activity feed: Track new bets (pool additions)
+  // Track realtime bets count for other purposes (not for activity feed)
   const previousBetsCountRef = useRef<number>(0);
   useEffect(() => {
     if (!realtimeBets || realtimeBets.length === 0) return;
-    
-    const currentBetsCount = realtimeBets.length;
-    const previousBetsCount = previousBetsCountRef.current;
-    
-    // If new bets were added, add "Added to pool" entries
-    if (currentBetsCount > previousBetsCount) {
-      const newBets = realtimeBets.slice(previousBetsCount);
-      
-      // Group new bets by timeperiod to show combined pool additions
-      const betsByTimeperiod = new Map<number, typeof realtimeBets>();
-      
-      newBets.forEach((bet) => {
-        const timeperiodId = bet.timeperiod_id;
-        if (!betsByTimeperiod.has(timeperiodId)) {
-          betsByTimeperiod.set(timeperiodId, []);
-        }
-        betsByTimeperiod.get(timeperiodId)!.push(bet);
-      });
-      
-      // Create "Added to pool" entries for each timeperiod
-      const newPoolActivities: typeof activityFeed = [];
-      
-      betsByTimeperiod.forEach((bets, timeperiodId) => {
-        const totalAmount = bets.reduce((sum, bet) => sum + bet.amount, 0);
-        
-        newPoolActivities.push({
-          id: `pool_bet_${timeperiodId}_${Date.now()}_${Math.random()}`,
-          type: 'pool_added',
-          amount: totalAmount,
-          isYou: false,
-          timestamp: Date.now(),
-        });
-      });
-      
-      if (newPoolActivities.length > 0) {
-        // Mark new items as highlighted
-        const highlightedActivities = newPoolActivities.map(activity => ({
-          ...activity,
-          isNew: true
-        }));
-        
-        setActivityFeed((prev) => {
-          const combined = [...highlightedActivities, ...prev];
-          return combined.slice(0, 20); // Keep last 20 items
-        });
-        
-        // Auto-scroll to top to show new items
-        setTimeout(() => {
-          if (activityFeedRef.current) {
-            activityFeedRef.current.scrollTop = 0;
-          }
-        }, 10);
-        
-        // Remove highlight after 3 seconds
-        setTimeout(() => {
-          setActivityFeed((prev) => 
-            prev.map(item => 
-              highlightedActivities.some(na => na.id === item.id) 
-                ? { ...item, isNew: false }
-                : item
-            )
-          );
-        }, 3000);
-      }
-    }
-    
-    previousBetsCountRef.current = currentBetsCount;
+    // Just update the count - activity feed is handled by settlement events
+    previousBetsCountRef.current = realtimeBets.length;
   }, [realtimeBets]);
 
   // Manage mounted state to prevent requests during reload/unmount
@@ -1331,11 +1401,28 @@ export default function TradingChart({
     if (!ctx) return;
 
     const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+      // Use parent container dimensions instead of window for proper responsive sizing
+      const parent = canvas.parentElement;
+      if (parent) {
+        const rect = parent.getBoundingClientRect();
+        canvas.width = rect.width;
+        canvas.height = rect.height;
+      } else {
+        // Fallback to window dimensions if no parent
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+      }
     };
     resize();
     window.addEventListener("resize", resize);
+    
+    // Also observe parent size changes
+    const resizeObserver = new ResizeObserver(() => {
+      resize();
+    });
+    if (canvas.parentElement) {
+      resizeObserver.observe(canvas.parentElement);
+    }
 
     // Update price with smooth interpolation
     let lastUpdateTime = 0;
@@ -1454,7 +1541,7 @@ export default function TradingChart({
       ctx.restore();
     };
 
-    let frame;
+    let frame: number | undefined;
     const draw = () => {
       const now = Date.now() / 1000;
       const w = canvas.width;
@@ -1574,43 +1661,7 @@ export default function TradingChart({
       //   ctx.fillRect(gripX - 3, gripY + i * 6, 6, 2);
       // }
 
-      // Draw price line - following Figma design exactly
-      if (visible.length > 1) {
-        const oldestX = centerX - (now - visible[0].t) * pxPerSec + (timeOffsetRef.current * pxPerSec) + (GRID_SEC / 2) * pxPerSec - GRID_SEC * pxPerSec;
-        const nowX = centerX + (timeOffsetRef.current * pxPerSec) - GRID_SEC * pxPerSec;
-        
-        // Create gradient from Figma: #00FF24 (bright green) to #046712 (darker green at 40%)
-        const lineGradient = ctx.createLinearGradient(oldestX, 0, nowX, 0);
-        lineGradient.addColorStop(0, "#046712"); // Darker green at tail (from Figma)
-        lineGradient.addColorStop(0.4, "#046712"); // Keep darker green up to 40%
-        lineGradient.addColorStop(1, "#00FF24"); // Bright green at NOW (from Figma)
-        
-        // Set up shadow from Figma: X: 0, Y: 1, Blur: 6.2, Color: #00FF24 at 60%
-        ctx.shadowOffsetX = 0;
-        ctx.shadowOffsetY = 1; // Y: 1 from Figma
-        ctx.shadowBlur = 6.2; // Blur: 6.2 from Figma
-        ctx.shadowColor = "rgba(0, 255, 36, 0.6)"; // #00FF24 at 60% opacity from Figma
-        
-        // Draw the line with Figma specs: 1.5px thickness
-        ctx.strokeStyle = lineGradient;
-        ctx.lineWidth = 1.5; // 1.5px from Figma
-        ctx.lineCap = "round";
-        ctx.lineJoin = "round";
-        
-        ctx.beginPath();
-        visible.forEach((d, i) => {
-          const x = centerX - (now - d.t) * pxPerSec + (timeOffsetRef.current * pxPerSec) + (GRID_SEC / 2) * pxPerSec - GRID_SEC * pxPerSec;
-          const y = h / 2 - (d.v - price - priceOffset) * pxPerPrice;
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        });
-        ctx.stroke();
-        
-        // Reset shadow
-        ctx.shadowOffsetX = 0;
-        ctx.shadowOffsetY = 0;
-        ctx.shadowBlur = 0;
-      }
+      // Price line drawing moved to end of draw function to ensure correct layering
 
       // Calculate NOW line position once (moves with time offset)
       const nowLineX = centerX + (timeOffsetRef.current * pxPerSec) +(GRID_SEC / 2) * pxPerSec - GRID_SEC * pxPerSec;
@@ -1748,45 +1799,8 @@ export default function TradingChart({
       ctx.shadowBlur = 0;
       ctx.shadowColor = "transparent";
 
-      // Current price dot - positioned at the endpoint of the price line at NOW line
-      const currentPriceDotY = h / 2 + priceOffset * pxPerPrice;
-      ctx.beginPath();
-      ctx.arc(nowLineX, currentPriceDotY, 6, 0, Math.PI * 2);
-      ctx.fillStyle = "#00ff24";
-      ctx.fill();
+      // Current price dot and badge moved to end of draw function
 
-      // Price badge - follows the dot with gradient background
-      const badgeX = nowLineX + 15;
-      const badgeY = currentPriceDotY - 12;
-      const badgeWidth = 80;
-      const badgeHeight = 24;
-      const badgeRadius = 12;
-      
-      // Create gradient from Figma design (left to right: darker green gradient)
-      const priceGradient = ctx.createLinearGradient(badgeX, badgeY, badgeX + badgeWidth, badgeY);
-      priceGradient.addColorStop(0, '#004D0A');
-      priceGradient.addColorStop(1, '#00650D');
-      
-      // Draw rounded rectangle with gradient (manual path for compatibility)
-      ctx.fillStyle = priceGradient;
-      ctx.beginPath();
-      ctx.moveTo(badgeX + badgeRadius, badgeY);
-      ctx.lineTo(badgeX + badgeWidth - badgeRadius, badgeY);
-      ctx.quadraticCurveTo(badgeX + badgeWidth, badgeY, badgeX + badgeWidth, badgeY + badgeRadius);
-      ctx.lineTo(badgeX + badgeWidth, badgeY + badgeHeight - badgeRadius);
-      ctx.quadraticCurveTo(badgeX + badgeWidth, badgeY + badgeHeight, badgeX + badgeWidth - badgeRadius, badgeY + badgeHeight);
-      ctx.lineTo(badgeX + badgeRadius, badgeY + badgeHeight);
-      ctx.quadraticCurveTo(badgeX, badgeY + badgeHeight, badgeX, badgeY + badgeHeight - badgeRadius);
-      ctx.lineTo(badgeX, badgeY + badgeRadius);
-      ctx.quadraticCurveTo(badgeX, badgeY, badgeX + badgeRadius, badgeY);
-      ctx.closePath();
-      ctx.fill();
-      
-      // Draw price text
-      ctx.fillStyle = "#FAFAFA";
-      ctx.font = "bold 13px 'Geist Mono',monospace";
-      ctx.textAlign = "left";
-      ctx.fillText(`$${price.toFixed(priceDecimals)}`, badgeX + 8, currentPriceDotY + 4);
 
       // Connection status indicator
       ctx.fillStyle = isConnected ? "#00ff24" : "#ff3333";
@@ -1847,7 +1861,8 @@ export default function TradingChart({
         const cellX = Math.round(xOriginForCells + i * gridW);
         
         // Calculate timeperiod for this cell (needed for settlement check)
-        const cellTime = now + (i * GRID_SEC) - timeOffsetRef.current;
+        // Add small epsilon to handle floating point precision issues at boundaries
+        const cellTime = now + (i * GRID_SEC) - timeOffsetRef.current + 0.0001;
         const timeperiodId = Math.floor(cellTime / GRID_SEC) * GRID_SEC;
         
         // Draw for ALL visible price levels (based on scroll position)
@@ -1875,9 +1890,9 @@ export default function TradingChart({
           const isPastCell = cellX + gridW < nowLineX;
           
           // Skip cells past/touching NOW line UNLESS they have settlements or other users' bets
-          if ((touchesNowLine || isPastCell) && !settlementState && !hasOtherUsersBetsQuick) {
-            continue;
-          }
+          // if ((touchesNowLine || isPastCell) && !settlementState && !hasOtherUsersBetsQuick) {
+          //   continue;
+          // }
           
           // Skip drawing multiplier if this is the EXACT hovered cell
           // We need to check if this cell's visual position matches the hover position
@@ -1928,42 +1943,38 @@ export default function TradingChart({
           
           // Get bet count for this grid
           const betCount = getCellBetCount(timeperiodId, priceLevel);
-          //now the selcted cell is haig multipler but not adjacent cell
-          const snappedCellTime = Math.floor(cellTime / GRID_SEC) * GRID_SEC + GRID_SEC / 2;
-          // console.log('Snapped cell time:', snappedCellTime);
           
+          // Check if this cell is selected using robust comparison
+          // Instead of relying on string key matching which can be fragile,
+          // check if any selected cell matches the current cell's timeperiod and price level
           let isSelectedCell = false;
-          selectedCellsRef.current.forEach((selected) => {
-            // Snap the selected cell's absolute time using the same logic
-            const selectedSnappedTime = Math.floor(selected.t / GRID_SEC) * GRID_SEC + GRID_SEC / 2;
-            // console.log('Selected snapped time:', selectedSnappedTime);
-            
-            // Check if both the snapped time AND price level match exactly
-            // This works regardless of panning because we compare absolute times
-            if (Math.abs(selectedSnappedTime - snappedCellTime) < 0.01 && 
-                Math.abs(selected.priceLevel - priceLevel) < 0.01) {
-              isSelectedCell = true;
-            }
-          });
           
-          if (!isSelectedCell) {
+          // Iterate through selected cells to find a match
+          // This is more robust than key matching because we can use tolerance
+          for (const selected of Array.from(selectedCellsRef.current.values())) {
+            // Calculate timeperiod for the selected cell
+            // Add small epsilon to match the cellTime calculation above
+            const selectedTimeperiodId = Math.floor((selected.t + 0.0001) / GRID_SEC) * GRID_SEC;
+            
+            // Check if timeperiod matches
+            if (selectedTimeperiodId === timeperiodId) {
+              // Check if price level matches (with small tolerance for float precision)
+              if (Math.abs(selected.priceLevel - priceLevel) < 0.001) {
+                isSelectedCell = true;
+                break;
+              }
+            }
+          }
+          
+          // if (!isSelectedCell) {
             // Check if other users have bets on this grid - if so, show RED nextUserMultiplier
             // Try multiple gridId formats to match realtimeBets (which uses 2 decimals)
-            // Format 1: priceLevel ± priceStep/2 (centered on priceLevel)
-            const priceMin1 = priceLevel - priceStep;
-            const priceMax1 = priceLevel;
-            const gridId1 = `${timeperiodId}_${priceMin1.toFixed(2)}_${priceMax1.toFixed(2)}`;
             
-            // Format 2: priceLevel - priceStep to priceLevel (matches getCellBetCount logic)
-            const priceMin2 = priceLevel - priceStep;
-            const priceMax2 = priceLevel;
-            const gridId2 = `${timeperiodId}_${priceMin2.toFixed(2)}_${priceMax2.toFixed(2)}`;
-            
-
             let otherUsersBets = allUsersBetsRef.current.get(gridId1);
-if (!otherUsersBets) {
-  otherUsersBets = allUsersBetsRef.current.get(gridId2);
-}
+        
+        if (!otherUsersBets) {
+        otherUsersBets = allUsersBetsRef.current.get(gridId2);
+        }
             // Check both formats (realtimeBets uses 2 decimals, so try both)
             
             if (!otherUsersBets || otherUsersBets.length === 0) {
@@ -2001,64 +2012,16 @@ if (!otherUsersBets) {
             }
 
             // Check for settlement state (win/loss) for other users' bets
-            const settlementState = otherUsersSettlementsRef.current.get(gridId1) 
-              || otherUsersSettlementsRef.current.get(gridId2);
-            const touchesNowLine = cellX <= nowLineX && cellX + gridW >= nowLineX;
-            const isPastCell = cellX + gridW < nowLineX;
-            const hasOtherUsersBets = !!(otherUsersBets && otherUsersBets.length > 0);
+            // const settlementState = otherUsersSettlementsRef.current.get(gridId1) 
+            //   || otherUsersSettlementsRef.current.get(gridId2);
+            // const touchesNowLine = cellX <= nowLineX && cellX + gridW >= nowLineX;
+            // const isPastCell = cellX + gridW < nowLineX;
+            // const hasOtherUsersBets = !!(otherUsersBets && otherUsersBets.length > 0);
             
-            // Keep drawing grids that have other users' bets or settlements even after NOW line
-            if ((touchesNowLine || isPastCell) && !hasOtherUsersBets && !settlementState) {
+            // Hide multipliers for past cells AND cells touching the NOW line
+            // The user requested: "it should disapperar after touching now line"
+            if (isPastCell || touchesNowLine) {
               continue;
-            }
-            
-            // Draw win/loss highlight for other users' settled bets
-            if (settlementState) {
-              const isWin = settlementState.status === 'win';
-              ctx.save();
-              ctx.lineWidth = 2;
-              ctx.strokeStyle = isWin ? "#4ADE80" : "#F87171";
-              ctx.fillStyle = isWin ? "rgba(74, 222, 128, 0.12)" : "rgba(248, 113, 113, 0.12)";
-              ctx.fillRect(cellX, cellY, gridW, gridH);
-              ctx.strokeRect(cellX, cellY, gridW, gridH);
-              
-              // Draw bet count badge for settlement cells
-              const settlementBetCount = otherUsersBets && otherUsersBets.length > 0 
-                ? otherUsersBets.length 
-                : betCount;
-              
-              if (settlementBetCount > 0) {
-                const badgeY = Math.round(cellY + gridH - 12);
-                const badgeHeight = 11;
-                const iconSize = 10;
-                const badgeWidth = iconSize + 4 + (settlementBetCount.toString().length * 6) + 8;
-                const badgeX = Math.round(cellX + gridW / 2 - badgeWidth / 2);
-                
-                // Draw badge background with win/loss color
-                ctx.fillStyle = isWin ? "rgba(74, 222, 128, 0.9)" : "rgba(248, 113, 113, 0.9)";
-                ctx.beginPath();
-                ctx.roundRect(badgeX, badgeY, badgeWidth, badgeHeight, 12);
-                ctx.fill();
-                
-                // Draw user icon
-                const iconX = badgeX + 4;
-                const badgeCenterY = Math.round(badgeY + badgeHeight / 2);
-                const iconY = Math.round(badgeCenterY - iconSize / 2);
-                drawPersonIcon(ctx, iconX, iconY, iconSize, "#ffffff");
-                
-                // Draw bet count
-                ctx.fillStyle = "#ffffff";
-                ctx.font = "10px 'Geist Mono',monospace";
-                ctx.textAlign = "left";
-                ctx.textBaseline = "middle";
-                ctx.fillText(`${settlementBetCount}`, iconX + iconSize + 2, badgeCenterY);
-              }
-              
-              ctx.restore();
-            } else if (hasOtherUsersBets) {
-              // ctx.strokeStyle = "#3B82F6"; // Blue color
-              // ctx.lineWidth = 2;
-              // ctx.strokeRect(cellX, cellY, gridW, gridH);
             }
             
             let displayMultiplier = multiplier;
@@ -2141,6 +2104,7 @@ if (!otherUsersBets) {
               ctx.fillText(`${displayMultiplier.toFixed(1)}X`, cellCenterX, cellCenterY);
               ctx.shadowBlur = 15 * glowIntensity;
               ctx.fillText(`${displayMultiplier.toFixed(1)}X`, cellCenterX, cellCenterY);
+
               // Final draw without shadow for crisp text
               ctx.shadowBlur = 0;
               ctx.shadowColor = "transparent";
@@ -2156,27 +2120,13 @@ if (!otherUsersBets) {
             ctx.textAlign = "left";
             ctx.textBaseline = "alphabetic";
             }
-          }
+          // }
           
           // Draw bet count if > 1 (with user icon)
-          if (betCount > 1) {
-            // Draw background pill
-            ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
-            ctx.beginPath();
-            ctx.roundRect(cellX + 4, cellY + 16, 20, 10, 6);
-            ctx.fill();
-            
-            // Draw user icon (simplified)
-            ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
-            drawPersonIcon(ctx, cellX + 6, cellY + 20, 6);
-            
-            // Draw count
-            ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
-            ctx.font = "6px 'Geist Mono',monospace";
-            ctx.fillText(`${betCount}`, cellX + 14, cellY + 24);
-          }
+          // REMOVED: We don't want to show other users' bet counts
         }
       }
+    
 
       // Draw all selected cells with state-based colors
       selectedCellsRef.current.forEach((selected, cellKey) => {
@@ -2205,6 +2155,10 @@ if (!otherUsersBets) {
             const alpha = elapsed < visibleDuration ? 1 : 1 - ((elapsed - visibleDuration) / fadeDuration);
             
             // Red lost state - continuous bright glow effect, no background color
+            // Mask background to hide underlying multiplier
+            ctx.fillStyle = "#000000";
+            ctx.fillRect(selLeft, selTop, gridW, gridH);
+
             // Continuous glow at maximum intensity (fades out over time)
             // Add intense red glow effect (multiple layers for gaming look) at maximum intensity
             // Layer 1: Outer glow (softest, largest) - continuous bright
@@ -2280,25 +2234,20 @@ if (!otherUsersBets) {
             ctx.shadowBlur = 0;
             ctx.shadowColor = "transparent";
             
-            // Draw only payout amount in center - Figma specs: Inter 900 italic 18px, red color
+            // Draw only bet amount with negative sign in center - shows how much was lost
             ctx.fillStyle = `rgba(255, 94, 94, ${alpha})`;
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
             
-            // Center the payout in the cell
+            // Center the amount in the cell
             const cellCenterX = selLeft + gridW / 2;
             const cellCenterY = selTop + gridH / 2;
             
-            // Show only payout if available
-            if (selected.payout) {
-              // Figma typography: Inter, 900 weight, italic, 18px
-              ctx.font = "900 italic 18px Inter, sans-serif";
-              ctx.fillText(`$${selected.payout.toFixed(2)}`, cellCenterX, cellCenterY);
-            } else {
-              // Fallback to price
-              ctx.font = "900 italic 16px Inter, sans-serif";
-              ctx.fillText(`$${selected.priceLevel.toFixed(priceDecimals)}`, cellCenterX, cellCenterY);
-            }
+            // Show negative bet amount (how much user lost)
+            const betAmount = selected.betAmount || 0.20; // Default to $0.20 if not set
+            ctx.font = "900 italic 16px Inter, sans-serif";
+            ctx.fillText(`-$${betAmount.toFixed(2)}`, cellCenterX, cellCenterY);
+            
             ctx.textAlign = "left";
             ctx.textBaseline = "alphabetic";
             
@@ -2309,6 +2258,10 @@ if (!otherUsersBets) {
           switch (selected.status) {
             case 'pending':
               // Hover state styling with spinner
+              // Mask background to hide underlying multiplier
+              ctx.fillStyle = "#000000";
+              ctx.fillRect(selLeft, selTop, gridW, gridH);
+              
               ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
               ctx.fillRect(selLeft, selTop, gridW, gridH);
               ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
@@ -2327,16 +2280,16 @@ if (!otherUsersBets) {
               
               if (selected.multiplier && selected.payout) {
                 // Calculate all positions from rounded selTop to ensure integer pixels
-                const multiplierY = Math.round(selTop + gridH / 2 - 12);
-                const amountY = Math.round(selTop + gridH / 2 + 6);
+                // const multiplierY = Math.round(selTop + gridH / 2 - 12);
+                // const amountY = Math.round(selTop + gridH / 2 + 6);
                 
                 // Draw current user multiplier (white, larger, bold)
-                ctx.font = "200 11px 'Geist Mono',monospace";
-                ctx.fillText(`${selected.multiplier.toFixed(2)}X`, selLeft + gridW / 2, multiplierY);
+                // ctx.font = "200 11px 'Geist Mono',monospace";
+                // ctx.fillText(`${selected.multiplier.toFixed(2)}X`, selLeft + gridW / 2, multiplierY);
                 
                 // Draw payout amount
                 ctx.font = "300 15px 'Geist Mono',monospace";
-                ctx.fillText(`$${selected.payout.toFixed(2)}`, selLeft + gridW / 2, amountY);
+                ctx.fillText(`$${selected.payout.toFixed(2)}`, selLeft + gridW / 2, selTop + gridH / 2);
                 
                 // Draw next user's multiplier (RED) below - only for pending (calculating...)
                 // Will show real value after confirmation
@@ -2352,6 +2305,10 @@ if (!otherUsersBets) {
               
             case 'confirmed': {
               // Yellow confirmed orders - continuous bright glow effect, no background color
+              // Mask background to hide underlying multiplier
+              ctx.fillStyle = "#000000";
+              ctx.fillRect(selLeft, selTop, gridW, gridH);
+
               // Add intense yellow glow effect (multiple layers for gaming look) at maximum intensity
               // Layer 1: Outer glow (softest, largest) - continuous bright
               ctx.shadowOffsetX = 0;
@@ -2454,6 +2411,10 @@ if (!otherUsersBets) {
               const elapsedWin = now * 1000 - selected.timestamp;
               
               // Green won state - continuous bright glow effect, no background color
+              // Mask background to hide underlying multiplier
+              ctx.fillStyle = "#000000";
+              ctx.fillRect(selLeft, selTop, gridW, gridH);
+
               // Add intense green glow effect (multiple layers for gaming look) at maximum intensity
               // Layer 1: Outer glow (softest, largest) - continuous bright
               ctx.shadowOffsetX = 0;
@@ -3051,18 +3012,103 @@ if (!otherUsersBets) {
         }
       }
 
-      requestAnimationFrame(draw);
-    };
+      // Ensure price line and dot are drawn absolutely last, on top of everything
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = "transparent";
 
-    frame = requestAnimationFrame(draw);
+      // Draw price line - following Figma design exactly
+      if (visible.length > 1) {
+        const oldestX = centerX - (now - visible[0].t) * pxPerSec + (timeOffsetRef.current * pxPerSec) + (GRID_SEC / 2) * pxPerSec - GRID_SEC * pxPerSec;
+        const nowX = centerX + (timeOffsetRef.current * pxPerSec) - GRID_SEC * pxPerSec;
+        
+        // Create gradient from Figma: #00FF24 (bright green) to #046712 (darker green at 40%)
+        const lineGradient = ctx.createLinearGradient(oldestX, 0, nowX, 0);
+        lineGradient.addColorStop(0, "#046712"); // Darker green at tail (from Figma)
+        lineGradient.addColorStop(0.4, "#046712"); // Keep darker green up to 40%
+        lineGradient.addColorStop(1, "#00FF24"); // Bright green at NOW (from Figma)
+        
+        // Set up shadow from Figma: X: 0, Y: 1, Blur: 6.2, Color: #00FF24 at 60%
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 1; // Y: 1 from Figma
+        ctx.shadowBlur = 6.2; // Blur: 6.2 from Figma
+        ctx.shadowColor = "rgba(0, 255, 36, 0.6)"; // #00FF24 at 60% opacity from Figma
+        
+        // Draw the line with Figma specs: 1.5px thickness
+        ctx.strokeStyle = lineGradient;
+        ctx.lineWidth = 1.5; // 1.5px from Figma
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        
+        ctx.beginPath();
+        visible.forEach((d, i) => {
+          const x = centerX - (now - d.t) * pxPerSec + (timeOffsetRef.current * pxPerSec) + (GRID_SEC / 2) * pxPerSec - GRID_SEC * pxPerSec;
+          const y = h / 2 - (d.v - price - priceOffset) * pxPerPrice;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+        
+        // Reset shadow
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 0;
+        ctx.shadowBlur = 0;
+      }
+
+      // Current price dot - positioned at the endpoint of the price line at NOW line
+      const currentPriceDotY = h / 2 + priceOffset * pxPerPrice;
+      ctx.beginPath();
+      ctx.arc(nowLineX, currentPriceDotY, 6, 0, Math.PI * 2);
+      ctx.fillStyle = "#00ff24";
+      ctx.fill();
+
+      // Price badge - follows the dot with gradient background
+      const badgeX = nowLineX + 15;
+      const badgeY = currentPriceDotY - 12;
+      const badgeWidth = 80;
+      const badgeHeight = 24;
+      const badgeRadius = 12;
+      
+      // Create gradient from Figma design (left to right: darker green gradient)
+      const priceGradient = ctx.createLinearGradient(badgeX, badgeY, badgeX + badgeWidth, badgeY);
+      priceGradient.addColorStop(0, '#004D0A');
+      priceGradient.addColorStop(1, '#00650D');
+      
+      // Draw rounded rectangle with gradient (manual path for compatibility)
+      ctx.fillStyle = priceGradient;
+      ctx.beginPath();
+      ctx.moveTo(badgeX + badgeRadius, badgeY);
+      ctx.lineTo(badgeX + badgeWidth - badgeRadius, badgeY);
+      ctx.quadraticCurveTo(badgeX + badgeWidth, badgeY, badgeX + badgeWidth, badgeY + badgeRadius);
+      ctx.lineTo(badgeX + badgeWidth, badgeY + badgeHeight - badgeRadius);
+      ctx.quadraticCurveTo(badgeX + badgeWidth, badgeY + badgeHeight, badgeX + badgeWidth - badgeRadius, badgeY + badgeHeight);
+      ctx.lineTo(badgeX + badgeRadius, badgeY + badgeHeight);
+      ctx.quadraticCurveTo(badgeX, badgeY + badgeHeight, badgeX, badgeY + badgeHeight - badgeRadius);
+      ctx.lineTo(badgeX, badgeY + badgeRadius);
+      ctx.quadraticCurveTo(badgeX, badgeY, badgeX + badgeRadius, badgeY);
+      ctx.closePath();
+      ctx.fill();
+      
+      // Draw price text
+      ctx.fillStyle = "#FAFAFA";
+      ctx.font = "bold 13px 'Geist Mono',monospace";
+      ctx.textAlign = "left";
+      ctx.fillText(`$${price.toFixed(priceDecimals)}`, badgeX + 8, currentPriceDotY + 4);
+
+      frame = requestAnimationFrame(draw);
+    };
+    
+    draw();
+
     return () => {
       // Mark as unmounted to prevent new requests
       isMountedRef.current = false;
       
       // Cancel animation frames
-      cancelAnimationFrame(frame);
+      if (frame !== undefined) cancelAnimationFrame(frame);
       cancelAnimationFrame(gen);
       window.removeEventListener("resize", resize);
+      resizeObserver.disconnect();
       
       // Clear fetch queue to cancel pending requests
       multiplierFetchQueue.current.clear();
@@ -3119,7 +3165,8 @@ if (!otherUsersBets) {
     const priceLevel = Math.floor(clickedPrice / priceStep) * priceStep + priceStep;
 
     // Snap cellTime to the nearest 5-second grid interval to match database timeperiod_id
-    const snappedCellTime = Math.floor(cellTime / GRID_SEC) * GRID_SEC + GRID_SEC / 2;
+    // Add small epsilon to handle floating point precision issues at boundaries
+    const snappedCellTime = Math.floor((cellTime + 0.0001) / GRID_SEC) * GRID_SEC + GRID_SEC / 2;
 
     return {
       t: cellTime,
@@ -3536,7 +3583,8 @@ if (!otherUsersBets) {
       
       // ✅ CHECK IF OTHER USERS HAVE ALREADY BET ON THIS GRID
       // If yes, use the RED "next user multiplier" instead of default multiplier
-      const timeperiodId = Math.floor(cellTime / GRID_SEC) * GRID_SEC;
+      // Add small epsilon to handle floating point precision issues at boundaries
+      const timeperiodId = Math.floor((cellTime + 0.0001) / GRID_SEC) * GRID_SEC;
       // ✅ Use 2 decimals to match useRealtimeBets grid ID format
       const gridId = `${timeperiodId}_${priceMin.toFixed(2)}_${priceMax.toFixed(2)}`;
       const otherUsersBets = allUsersBetsRef.current.get(gridId);
@@ -3667,6 +3715,14 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
               });
               setShowGridIdPopup(true);
               
+              // Dispatch event to notify Positions table about new bet
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('newBetPlaced', {
+                  detail: { orderId: result.orderId, priceLevel, timeperiodId: Math.floor(cellTime / 5) * 5 }
+                }));
+                console.log('📢 Dispatched newBetPlaced event');
+              }
+              
               // Auto-hide success popup after 2 seconds
               setTimeout(() => setShowGridIdPopup(false), 2000);
             } else {
@@ -3779,7 +3835,7 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
   }, [recenterTrigger]);
 
     return (
-    <div style={{ position: 'relative', width: '100%', height: '100vh' }}>
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       <canvas
         ref={canvasRef}
         onMouseMove={handleMouseMove}
@@ -3801,16 +3857,16 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
         disabled={!isScrolled || isRecenteringRef.current}
         style={{
           position: 'absolute',
-          top: '2rem',
-          left: '5rem',
+          top: 'clamp(1rem, 3%, 2rem)',
+          left: 'clamp(3rem, 5%, 5rem)',
           display: 'flex',
           alignItems: 'center',
           gap: '6px',
-          padding: '8px',
+          padding: 'clamp(6px, 1%, 8px)',
           background: (!isScrolled || isRecenteringRef.current) ? 'transparent' : '#091c0d',
           border: (!isScrolled || isRecenteringRef.current) ? '1px solid #00FF241F' : '1px solid #00FF241F',
           fontFamily: "'Geist Mono', monospace",
-          fontSize: '12px',
+          fontSize: 'clamp(10px, 1vw, 12px)',
           fontWeight: 300,
           color: (!isScrolled || isRecenteringRef.current) ? '#4a4a4a' : '#ffffff',
           cursor: (!isScrolled || isRecenteringRef.current) ? 'not-allowed' : 'pointer',
@@ -3852,42 +3908,32 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
         ref={activityFeedRef}
         style={{
           position: 'absolute',
-          bottom: '16px',
-          left: '5rem',
-          width: '188px',
-          maxHeight: '324px',
-          padding: '12px',
-          paddingBottom: '14px',
-          zIndex: 1000,
+          bottom: '20%',
+          left: 'clamp(40px, 5%, 80px)',
+          width: 'clamp(200px, 20%, 300px)',
+          maxHeight: '25%',
+          padding: '8px',
+          zIndex: 9999,
           fontFamily: "'Geist Mono', monospace",
-          fontSize: '12px',
+          fontSize: 'clamp(11px, 1vw, 14px)',
           display: 'flex',
           flexDirection: 'column',
-          gap: '12px',
-          borderRadius: '8px',
+          gap: '8px',
           background: 'transparent',
+          borderRadius: '8px',
           overflowY: 'auto',
           overflowX: 'hidden',
           scrollBehavior: 'smooth',
+          pointerEvents: 'none',
         }}
       >
-        {/* 2px gradient at bottom */}
-        <div
-          style={{
-            position: 'absolute',
-            bottom: 0,
-            left: 0,
-            right: 0,
-            height: '2px',
-            background: 'linear-gradient(0deg, #021404 100%, #020202 100%)',
-            borderRadius: '0 0 8px 8px',
-            pointerEvents: 'none',
-            zIndex: 1,
-          }}
-        />
+        {/* Debug: always show count */}
+        {/* <div style={{ color: '#00FF24', fontSize: '11px' }}>
+          Activity Feed ({activityFeed.length})
+        </div> */}
         {activityFeed.length === 0 ? (
-          <div style={{ color: '#4D504D', fontSize: '16px', textAlign: 'center', position: 'relative', zIndex: 2 }}>
-            No activity yet
+          <div style={{ color: '#666', fontSize: '12px' }}>
+            
           </div>
         ) : (
           activityFeed.map((activity, index) => (
@@ -3897,81 +3943,66 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
                 display: 'flex',
                 alignItems: 'center',
                 gap: '8px',
-                color: activity.type === 'won' && activity.isYou ? '#FFD700' : activity.type === 'won' ? '#ffffff' : '#4D504D',
-                position: 'relative',
-                zIndex: 2,
-                textShadow: activity.isNew ? '0 0 8px rgba(0, 255, 36, 0.8), 0 0 12px rgba(0, 255, 36, 0.6), 0 0 16px rgba(0, 255, 36, 0.4)' : 'none',
-                animation: activity.isNew ? 'textGlow 0.5s ease-out' : 'none',
-                transition: 'text-shadow 0.3s ease',
+                pointerEvents: 'none',
               }}
             >
-        
-              <span style={{ flex: 1, fontSize: '11px', lineHeight: '1.4' }}>
+              <span style={{ fontSize: '14px', lineHeight: '1.4' }}>
                 {activity.type === 'won' ? (
                   <>
                     {activity.isYou ? (
                       <>
                         <span style={{ 
-                          color: activity.isNew ? '#ffffff' : '#FFD700',
-                          fontSize: '16px',
-                          textShadow: activity.isNew ? '0 0 8px rgba(0, 255, 36, 0.8), 0 0 12px rgba(0, 255, 36, 0.6), 0 0 16px rgba(0, 255, 36, 0.4)' : 'none',
-                          animation: activity.isNew ? 'textGlow 0.5s ease-out' : 'none',
-                          transition: 'text-shadow 0.3s ease, color 0.3s ease',
-                        }}>You won</span>{' '}
+                          color: '#FFD700',
+                          fontSize: '14px',
+                          fontWeight: 400,
+                        }}>You</span>{' '}
                         <span style={{ 
-                          color: activity.isNew ? '#00FF24' : '#00FF24',
-                          fontSize: '16px',
-                          textShadow: activity.isNew ? '0 0 8px rgba(0, 255, 36, 0.8), 0 0 12px rgba(0, 255, 36, 0.6), 0 0 16px rgba(0, 255, 36, 0.4)' : 'none',
-                          animation: activity.isNew ? 'textGlow 0.5s ease-out' : 'none',
-                          transition: 'text-shadow 0.3s ease',
-                        }}>${activity.amount.toFixed(2)} ({activity.multiplier?.toFixed(1)}X)</span>
+                          color: '#ffffff',
+                          fontSize: '14px',
+                          fontWeight: 400,
+                        }}>won</span>{' '}
+                        <span style={{ 
+                          color: '#00FF24',
+                          fontSize: '14px',
+                          fontWeight: 700,
+                          fontStyle: 'italic',
+                        }}>${activity.amount.toFixed(2)} ({activity.multiplier?.toFixed(0)}X)</span>
                       </>
                     ) : (
                       <>
                         <span style={{
-                          color: activity.isNew ? '#ffffff' : '#ffffff',
-                          textShadow: activity.isNew ? '0 0 8px rgba(0, 255, 36, 0.8), 0 0 12px rgba(0, 255, 36, 0.6), 0 0 16px rgba(0, 255, 36, 0.4)' : 'none',
-                          animation: activity.isNew ? 'textGlow 0.5s ease-out' : 'none',
-                          transition: 'text-shadow 0.3s ease',
+                          color: '#ffffff',
+                          fontSize: '14px',
+                          fontWeight: 400,
                         }}>@{activity.username}</span>{' '}
                         <span style={{ 
-                          color: activity.isNew ? '#ffffff' : '#ffffff',
-                          textShadow: activity.isNew ? '0 0 8px rgba(0, 255, 36, 0.8), 0 0 12px rgba(0, 255, 36, 0.6), 0 0 16px rgba(0, 255, 36, 0.4)' : 'none',
-                          animation: activity.isNew ? 'textGlow 0.5s ease-out' : 'none',
-                          transition: 'text-shadow 0.3s ease',
+                          color: '#ffffff',
+                          fontSize: '14px',
+                          fontWeight: 400,
                         }}>won</span>{' '}
                         <span style={{ 
-                          color: activity.isNew ? '#00FF24' : '#00FF24',
-                          textShadow: activity.isNew ? '0 0 8px rgba(0, 255, 36, 0.8), 0 0 12px rgba(0, 255, 36, 0.6), 0 0 16px rgba(0, 255, 36, 0.4)' : 'none',
-                          animation: activity.isNew ? 'textGlow 0.5s ease-out' : 'none',
-                          transition: 'text-shadow 0.3s ease',
-                        }}>${activity.amount.toFixed(2)} ({activity.multiplier?.toFixed(1)}X)</span>
+                          color: '#00FF24',
+                          fontSize: '14px',
+                          fontWeight: 700,
+                          fontStyle: 'italic',
+                        }}>${activity.amount.toFixed(2)} ({activity.multiplier?.toFixed(0)}X)</span>
                       </>
                     )}
                   </>
                 ) : (
                   <>
-                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                     <span style={{ 
-                       color: activity.isNew ? '#ffffff' : '#4D504D',
-                       fontSize: '12px',
-                       fontFamily: "'Geist Mono', monospace",
-                       textShadow: activity.isNew ? '0 0 8px rgba(0, 255, 36, 0.8), 0 0 12px rgba(0, 255, 36, 0.6), 0 0 16px rgba(0, 255, 36, 0.4)' : 'none',
-                       animation: activity.isNew ? 'textGlow 0.5s ease-out' : 'none',
-                       transition: 'text-shadow 0.3s ease, color 0.3s ease',
-                     }}>Added to pool</span>{' '}
-                     <span style={{ 
-                       color: activity.isNew ? '#00FF24' : '#01690F',
-                       fontSize: '16px',
-                       fontFamily: "'Geist Mono', monospace", 
-                       fontWeight: 900,
-                       fontStyle: 'italic',
-                       textShadow: activity.isNew ? '0 0 8px rgba(0, 255, 36, 0.8), 0 0 12px rgba(0, 255, 36, 0.6), 0 0 16px rgba(0, 255, 36, 0.4)' : 'none',
-                       animation: activity.isNew ? 'textGlow 0.5s ease-out' : 'none',
-                       transition: 'text-shadow 0.3s ease, color 0.3s ease',
-                     }}>+${activity.amount.toFixed(2)}</span>
-                   </div>
-                     </>
+                    <span style={{ 
+                      color: '#4D504D',
+                      fontSize: '14px',
+                      fontWeight: 400,
+                    }}>Added to pool</span>{' '}
+                    <span style={{ 
+                      color: '#01690F',
+                      fontSize: '14px',
+                      fontWeight: 700,
+                      fontStyle: 'italic',
+                    }}>+${activity.amount.toFixed(2)}</span>
+                  </>
                 )}
               </span>
             </div>
@@ -4052,9 +4083,9 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
 
     {/* Check icon (SVG instead of emoji) */}
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-<g clip-path="url(#clip0_55_10048)">
+<g clipPath="url(#clip0_55_10048)">
 <path d="M6.82867 10.876L4 8.04668L4.94267 7.10402L6.82867 8.98935L10.5993 5.21802L11.5427 6.16135L6.82867 10.876Z" fill="#00FF24"/>
-<path fill-rule="evenodd" clip-rule="evenodd" d="M0.666992 8.00008C0.666992 3.95008 3.95033 0.666748 8.00033 0.666748C12.0503 0.666748 15.3337 3.95008 15.3337 8.00008C15.3337 12.0501 12.0503 15.3334 8.00033 15.3334C3.95033 15.3334 0.666992 12.0501 0.666992 8.00008ZM8.00033 14.0001C7.21239 14.0001 6.43218 13.8449 5.70423 13.5434C4.97627 13.2418 4.31484 12.7999 3.75768 12.2427C3.20053 11.6856 2.75858 11.0241 2.45705 10.2962C2.15552 9.56823 2.00033 8.78801 2.00033 8.00008C2.00033 7.21215 2.15552 6.43193 2.45705 5.70398C2.75858 4.97603 3.20053 4.31459 3.75768 3.75744C4.31484 3.20029 4.97627 2.75833 5.70423 2.4568C6.43218 2.15528 7.21239 2.00008 8.00033 2.00008C9.59162 2.00008 11.1177 2.63222 12.243 3.75744C13.3682 4.88266 14.0003 6.40878 14.0003 8.00008C14.0003 9.59138 13.3682 11.1175 12.243 12.2427C11.1177 13.3679 9.59162 14.0001 8.00033 14.0001Z" fill="#00FF24"/>
+<path fillRule="evenodd" clipRule="evenodd" d="M0.666992 8.00008C0.666992 3.95008 3.95033 0.666748 8.00033 0.666748C12.0503 0.666748 15.3337 3.95008 15.3337 8.00008C15.3337 12.0501 12.0503 15.3334 8.00033 15.3334C3.95033 15.3334 0.666992 12.0501 0.666992 8.00008ZM8.00033 14.0001C7.21239 14.0001 6.43218 13.8449 5.70423 13.5434C4.97627 13.2418 4.31484 12.7999 3.75768 12.2427C3.20053 11.6856 2.75858 11.0241 2.45705 10.2962C2.15552 9.56823 2.00033 8.78801 2.00033 8.00008C2.00033 7.21215 2.15552 6.43193 2.45705 5.70398C2.75858 4.97603 3.20053 4.31459 3.75768 3.75744C4.31484 3.20029 4.97627 2.75833 5.70423 2.4568C6.43218 2.15528 7.21239 2.00008 8.00033 2.00008C9.59162 2.00008 11.1177 2.63222 12.243 3.75744C13.3682 4.88266 14.0003 6.40878 14.0003 8.00008C14.0003 9.59138 13.3682 11.1175 12.243 12.2427C11.1177 13.3679 9.59162 14.0001 8.00033 14.0001Z" fill="#00FF24"/>
 </g>
 <defs>
 <clipPath id="clip0_55_10048">
