@@ -49,7 +49,7 @@ export const DepositWithdrawProvider: React.FC<DepositWithdrawProviderProps> = (
   const [isApproved, setIsApproved] = useState(false);
   const [approvalAmount, setApprovalAmount] = useState('0');
 
-  // Initialize SDK
+  // Initialize SDK once
   useEffect(() => {
     const config: DepositWithdrawConfig = {
       wrapperContractAddress: CONTRACTS.WRAPPER,
@@ -58,14 +58,11 @@ export const DepositWithdrawProvider: React.FC<DepositWithdrawProviderProps> = (
       chainId: DEFAULT_CHAIN_ID,
       rpcUrl: ENV.RPC_URL,
     };
-
-    const newSdk = new DepositWithdrawSDK(config);
-    setSdk(newSdk);
+    setSdk(new DepositWithdrawSDK(config));
   }, []);
 
   const connect = async () => {
     if (!sdk) return;
-
     setIsLoading(true);
     setError(null);
 
@@ -74,12 +71,12 @@ export const DepositWithdrawProvider: React.FC<DepositWithdrawProviderProps> = (
       setUserAddress(result.address);
       setIsConnected(true);
       
-      // Refresh balances and check approval after connecting
-      await refreshBalance();
-      await checkApproval();
+      // Only fetch HyperEVM balances if on HyperEVM
+      if (result.chainId === DEFAULT_CHAIN_ID) {
+        await refreshBalance();
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to connect');
-      console.error('Connection error:', err);
     } finally {
       setIsLoading(false);
     }
@@ -91,6 +88,8 @@ export const DepositWithdrawProvider: React.FC<DepositWithdrawProviderProps> = (
     setBalance(null);
     setWalletBalance(null);
     setError(null);
+    setIsApproved(false);
+    setApprovalAmount('0');
   };
 
   const checkApproval = async () => {
@@ -101,24 +100,21 @@ export const DepositWithdrawProvider: React.FC<DepositWithdrawProviderProps> = (
       setIsApproved(approval.isApproved);
       setApprovalAmount(approval.allowanceFormatted);
     } catch (err: any) {
-      console.error('Failed to check approval:', err);
+      console.log('Approval check skipped (likely wrong network)');
+      setIsApproved(false);
+      setApprovalAmount('0');
     }
   };
 
   const approve = async (amount?: string) => {
-    if (!sdk || !isConnected) {
-      throw new Error('Not connected');
-    }
+    if (!sdk || !isConnected) throw new Error('Not connected');
 
     setIsLoading(true);
     setError(null);
 
     try {
       const result = await sdk.approveUSDTO(amount);
-      
-      // Refresh approval status after approval
       await checkApproval();
-      
       return result;
     } catch (err: any) {
       const errorMsg = err.message || 'Approval failed';
@@ -130,19 +126,14 @@ export const DepositWithdrawProvider: React.FC<DepositWithdrawProviderProps> = (
   };
 
   const deposit = async (amount: string) => {
-    if (!sdk || !isConnected) {
-      throw new Error('Not connected');
-    }
+    if (!sdk || !isConnected) throw new Error('Not connected');
 
     setIsLoading(true);
     setError(null);
 
     try {
       const result = await sdk.depositUSDTO(amount);
-      
-      // Refresh balance after deposit
       await refreshBalance();
-      
       return result;
     } catch (err: any) {
       const errorMsg = err.message || 'Deposit failed';
@@ -154,19 +145,14 @@ export const DepositWithdrawProvider: React.FC<DepositWithdrawProviderProps> = (
   };
 
   const withdraw = async (amount: string) => {
-    if (!sdk || !isConnected) {
-      throw new Error('Not connected');
-    }
+    if (!sdk || !isConnected) throw new Error('Not connected');
 
     setIsLoading(true);
     setError(null);
 
     try {
       const result = await sdk.withdrawUSDTO(amount);
-      
-      // Refresh balance after withdraw
       await refreshBalance();
-      
       return result;
     } catch (err: any) {
       const errorMsg = err.message || 'Withdraw failed';
@@ -185,31 +171,17 @@ export const DepositWithdrawProvider: React.FC<DepositWithdrawProviderProps> = (
         sdk.getUSDTOBalance(),
         sdk.getUSDTOWalletBalance()
       ]);
-      
       setBalance(contractBalance);
       setWalletBalance(walletBal);
-      
-      // Also check approval status
       await checkApproval();
     } catch (err: any) {
-      console.error('Failed to refresh balance:', err);
+      console.log('Balance refresh skipped (likely wrong network)');
+      setBalance({ balance: '0', balanceFormatted: '0.00', tokenSymbol: 'USDTO' });
+      setWalletBalance({ balance: '0', balanceFormatted: '0.00', tokenSymbol: 'USDTO' });
     }
   };
 
-  const clearError = () => {
-    setError(null);
-  };
-
-  // Auto-refresh balance every 60 seconds (reduced to avoid rate limits)
-  useEffect(() => {
-    if (!isConnected) return;
-
-    const interval = setInterval(() => {
-      refreshBalance();
-    }, 60000); // Changed from 30000 (30s) to 60000 (60s)
-
-    return () => clearInterval(interval);
-  }, [isConnected]);
+  const clearError = () => setError(null);
 
   const value: DepositWithdrawContextType = {
     sdk,

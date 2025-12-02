@@ -309,7 +309,7 @@ export default function Navbar({ onDepositClick, onEnableTrading }: NavbarProps)
                 ) : (
                   <div className="w-6 h-6 rounded-full bg-red-500 flex items-center justify-center flex-shrink-0"></div>
                 )}
-                <span className="font-[Geist Mono] text-[11px] md:text-[12px] text-white whitespace-nowrap">
+                <span className="font-[Geist Mono] text-[16px] md:text-[16px] text-white whitespace-nowrap">
                   {profile?.username ? `@${profile.username}` : formatAddress(address)}
                 </span>
                 <div
@@ -392,7 +392,7 @@ export default function Navbar({ onDepositClick, onEnableTrading }: NavbarProps)
             <div className="flex flex-col p-4 gap-2 pb-6 w-full overflow-x-hidden">
               {/* Mobile Navigation */}
               <div 
-                className={`px-4 py-3 text-[16px] font-[500] cursor-pointer transition-colors duration-300 hover:bg-white/10 rounded-lg ${
+                className={`px-4 py-3 text-[18px] font-[500] cursor-pointer transition-colors duration-300 hover:bg-white/10 rounded-lg ${
                   activeNavItem === 'Trade' ? 'bg-[#00ff24]/10 text-[#00ff24]' : 'text-gray-400'
                 }`}
                 onClick={() => {
@@ -403,7 +403,7 @@ export default function Navbar({ onDepositClick, onEnableTrading }: NavbarProps)
                 Trade
               </div>
               <div 
-                className={`px-4 py-3 text-[16px] font-[500] cursor-pointer transition-colors duration-300 hover:bg-white/10 rounded-lg ${
+                className={`px-4 py-3 text-[18px] font-[500] cursor-pointer transition-colors duration-300 hover:bg-white/10 rounded-lg ${
                   activeNavItem === 'Leaderboard' ? 'bg-[#00ff24]/10 text-[#00ff24]' : 'text-gray-400'
                 }`}
                 onClick={() => {
@@ -425,7 +425,7 @@ export default function Navbar({ onDepositClick, onEnableTrading }: NavbarProps)
                 Refferal
               </div>
               <div 
-                className={`px-4 py-3 text-[16px] font-[500] cursor-pointer transition-colors duration-300 hover:bg-white/10 rounded-lg ${
+                className={`px-4 py-3 text-[18px] font-[500] cursor-pointer transition-colors duration-300 hover:bg-white/10 rounded-lg ${
                   activeNavItem === 'Portfolio' ? 'bg-[#00ff24]/10 text-[#00ff24]' : 'text-gray-400'
                 }`}
                 onClick={() => {
@@ -449,7 +449,7 @@ export default function Navbar({ onDepositClick, onEnableTrading }: NavbarProps)
                     }}
                     className="flex items-center justify-between bg-white/5 rounded-lg p-3 cursor-pointer transition-all duration-200 hover:opacity-90"
                   >
-                    <span className="font-[Geist Mono] text-[14px] text-white">
+                    <span className="font-[Geist Mono] text-[16px] text-white">
                       {isLoadingWrapper ? '...' : formatBalance(wrapperBalanceUSD)}
                     </span>
                     <div
@@ -462,7 +462,7 @@ export default function Navbar({ onDepositClick, onEnableTrading }: NavbarProps)
                   {/* Enable Trading */}
                   {!hasActiveSession && (
                     <button
-                      className="w-full px-4 py-3 bg-[#00FF24] rounded-lg text-black font-[Geist Mono] text-[14px] font-500 transition-all duration-300 hover:bg-black hover:text-white"
+                      className="w-full px-4 py-3 bg-[#00FF24] rounded-lg text-black font-[Geist Mono] text-[16px] font-500 transition-all duration-300 hover:bg-black hover:text-white"
                       onClick={() => {
                         handleEnableTrading();
                         setShowMobileMenu(false);

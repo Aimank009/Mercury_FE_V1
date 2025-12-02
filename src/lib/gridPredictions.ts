@@ -732,7 +732,7 @@ export async function getGridMultiplier(
         effectiveBasePrice = 0.66;
       } else if (timeUntilStart > 15 && timeUntilStart <= 25) {
         effectiveBasePrice = 0.5;
-      } else if (timeUntilStart > 25 && timeUntilStart <= 40) {
+      } else if (timeUntilStart > 25 && timeUntilStart < 40) {
         effectiveBasePrice = 0.35;
       } else {
         effectiveBasePrice = 0.2;
@@ -778,7 +778,7 @@ export function getQuickMultiplier(timeperiodId: number): number {
         effectiveBasePrice = 0.66;
       } else if (timeUntilStart > 15 && timeUntilStart <= 25) {
         effectiveBasePrice = 0.5;
-      } else if (timeUntilStart > 25 && timeUntilStart <= 40) {
+      } else if (timeUntilStart > 25 && timeUntilStart < 40) {
         effectiveBasePrice = 0.35;
       } else {
         effectiveBasePrice = 0.2;

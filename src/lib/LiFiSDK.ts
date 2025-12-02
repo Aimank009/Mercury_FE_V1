@@ -9,10 +9,10 @@ export interface ChainOption {
 }
 
 export const SUPPORTED_CHAINS: ChainOption[] = [
-  { id: 1, name: 'Ethereum', key: 'ETH' },
-  { id: 42161, name: 'Arbitrum', key: 'ARB' },
-  { id: 1151111081099710, name: 'Solana', key: 'SOL' },
-  { id: 999, name: 'HyperEVM', key: 'HYPE' },
+  { id: 1, name: 'Ethereum', key: 'ETH', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
+  { id: 42161, name: 'Arbitrum', key: 'ARB', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/arbitrum/info/logo.png' },
+  { id: 1151111081099710, name: 'Solana', key: 'SOL', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png' },
+  { id: 999, name: 'HyperEVM', key: 'HYPE', logoURI: '/image.png' },
 ];
 
 // Initialize LiFi config
@@ -72,7 +72,7 @@ export class LiFiSDK {
     }
   }
 
-  async executeRoute(walletClient: any, route: Route): Promise<any> {
+  async executeRoute(walletClient: any, route: Route,): Promise<any> {
     try {
       // Execute route with LiFi - the SDK handles the transaction execution
       // For now, we'll return a mock response until properly integrated with wallet

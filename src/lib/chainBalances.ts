@@ -1,66 +1,83 @@
-import { createPublicClient, http, formatEther, type Address } from 'viem';
-import { mainnet, arbitrum } from 'viem/chains';
+import { ethers } from 'ethers';
 
-// Define Solana chain (not in viem by default)
-const solana = {
-  id: 1151111081099710,
-  name: 'Solana',
-  nativeCurrency: {
-    decimals: 9,
-    name: 'SOL',
-    symbol: 'SOL',
-  },
-  rpcUrls: {
-    default: {
-      http: ['https://api.mainnet-beta.solana.com'],
-    },
-    public: {
-      http: ['https://api.mainnet-beta.solana.com'],
-    },
-  },
+const ERC20_ABI = [
+  "function balanceOf(address owner) external view returns (uint256)",
+  "function decimals() external view returns (uint8)",
+  "function symbol() external view returns (string)"
+];
+
+// RPC URLs for different chains
+const CHAIN_RPC_URLS: Record<number, string> = {
+  1: 'https://eth.llamarpc.com', // Ethereum
+  42161: 'https://arb1.arbitrum.io/rpc', // Arbitrum
+  999: 'https://rpc.hyperliquid.xyz/evm', // HyperEVM
 };
 
-// Chain configurations
-const chainConfigs = {
-  1: {
-    chain: mainnet,
-    rpcUrl: 'https://eth.llamarpc.com',
-  },
-  42161: {
-    chain: arbitrum,
-    rpcUrl: 'https://arb1.arbitrum.io/rpc',
-  },
-};
-
-export async function getChainBalance(chainId: number, address: Address): Promise<string> {
+/**
+ * Get token balance on any chain
+ * @param chainId - Chain ID (1 = Ethereum, 42161 = Arbitrum, 999 = HyperEVM)
+ * @param userAddress - User's wallet address
+ * @param tokenAddress - Token contract address (0x0... for native token)
+ * @returns Formatted balance string
+ */
+export async function getChainBalance(
+  chainId: number,
+  userAddress: string,
+  tokenAddress: string = '0x0000000000000000000000000000000000000000'
+): Promise<string> {
   try {
-    // Special handling for Solana
-    if (chainId === 1151111081099710) {
-      // For Solana, we'd need to use Solana Web3.js
-      // For now, return a placeholder
+    const rpcUrl = CHAIN_RPC_URLS[chainId];
+    if (!rpcUrl) {
+      console.error(`No RPC URL configured for chain ${chainId}`);
       return '0.00';
     }
 
-    // Get chain config
-    const config = chainConfigs[chainId as keyof typeof chainConfigs];
-    if (!config) {
-      console.warn(`No config for chain ${chainId}`);
-      return '0.00';
+    const provider = new ethers.providers.JsonRpcProvider(rpcUrl);
+
+    // Check if it's native token (ETH, ARB, HYPE)
+    if (tokenAddress === '0x0000000000000000000000000000000000000000') {
+      const balance = await provider.getBalance(userAddress);
+      // Return full precision for display
+      return ethers.utils.formatEther(balance);
     }
 
-    // Create public client for the chain
-    const client = createPublicClient({
-      chain: config.chain,
-      transport: http(config.rpcUrl),
-    });
-
-    // Fetch balance
-    const balance = await client.getBalance({ address });
-    const formatted = formatEther(balance);
+    // ERC20 token
+    const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
     
-    return parseFloat(formatted).toFixed(4);
+    const [balance, decimals] = await Promise.all([
+      tokenContract.balanceOf(userAddress),
+      tokenContract.decimals()
+    ]);
+
+    const formatted = ethers.utils.formatUnits(balance, decimals);
+    // Return full precision for display
+    return formatted;
   } catch (error) {
-    console.error(`Failed to fetch balance for chain ${chainId}:`, error);
+    console.error(`Failed to fetch balance on chain ${chainId}:`, error);
     return '0.00';
   }
+}
+
+/**
+ * Get multiple token balances on a chain
+ * @param chainId - Chain ID
+ * @param userAddress - User's wallet address  
+ * @param tokenAddresses - Array of token contract addresses
+ * @returns Map of token address to balance
+ */
+export async function getMultipleBalances(
+  chainId: number,
+  userAddress: string,
+  tokenAddresses: string[]
+): Promise<Record<string, string>> {
+  const balances: Record<string, string> = {};
+  
+  await Promise.all(
+    tokenAddresses.map(async (tokenAddress) => {
+      const balance = await getChainBalance(chainId, userAddress, tokenAddress);
+      balances[tokenAddress] = balance;
+    })
+  );
+
+  return balances;
 }

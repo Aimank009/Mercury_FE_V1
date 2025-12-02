@@ -13,7 +13,7 @@
   }
 
   body {
-    font-family: var(--font-geist-mono), 'Geist Mono', monospace;
+    font-family: 'Geist', sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     background-color: #000000;
@@ -29,25 +29,44 @@
   button {
     font-family: inherit;
   }
+
+  /* Special classes for mono font when needed */
+  .font-mono, .font-geist-mono {
+    font-family: 'Geist Mono', monospace;
+  }
+
+  /* Code elements should use mono font */
+  code, pre, .code {
+    font-family: 'Geist Mono', monospace;
+  }
 }
 
 @layer utilities {
   .scrollbar-thin::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 6px;
+    height: 6px;
   }
 
   .scrollbar-thin::-webkit-scrollbar-track {
-    background: rgba(255, 255, 255, 0.05);
+    background: transparent;
   }
 
   .scrollbar-thin::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.2);
-    border-radius: 4px;
+    background: #1a3d2a;
+    border-radius: 3px;
   }
 
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.3);
+    background: #00ff41;
+  }
+  
+  /* Custom scrollbar for token dropdown */
+  .scrollbar-thumb-\[\#1a3d2a\]::-webkit-scrollbar-thumb {
+    background: #1a3d2a;
+  }
+  
+  .scrollbar-track-transparent::-webkit-scrollbar-track {
+    background: transparent;
   }
 
   @keyframes spin {

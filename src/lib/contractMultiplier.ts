@@ -140,9 +140,14 @@ export function calculatePricePerShare(
     // Use MAX to prevent multiplier from going up
     basePrice = timeBasedPrice > BASE_PRICE ? timeBasedPrice : BASE_PRICE;
     
+    // FIX: For times > 40 seconds, return base price only (5x multiplier)
+    // Don't add share adjustment when timeUntilStart > 40
+    if (timeUntilStart > 40) {
+      return basePrice;
+    }
+
     // Add volume adjustment with DYNAMIC B decay
     let pricePerShare = basePrice + (existingShares * PRECISION) / currentB;
-    
     // Cap at max price (1:1 redemption)
     const maxPrice = (SHARE_REDEMPTION_VALUE * PRECISION) / BigInt(1e6);
     if (pricePerShare > maxPrice) {

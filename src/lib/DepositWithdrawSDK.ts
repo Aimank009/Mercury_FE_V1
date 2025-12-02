@@ -102,18 +102,12 @@ export class DepositWithdrawSDK {
       throw new Error('MetaMask not installed');
     }
 
-    // Create provider with explicit network to avoid auto-detection issues
-    const network = {
-      name: 'hyperevm',
-      chainId: this.config.chainId
-    };
+    // Use 'any' network to allow switching between chains without errors
+    this.provider = new ethers.providers.Web3Provider(window.ethereum, 'any');
     
-    this.provider = new ethers.providers.Web3Provider(window.ethereum, network);
-    
-    // Request accounts - this may return empty if user hasn't connected
+    // Request accounts
     const accounts = await (this.provider as any).send('eth_requestAccounts', []);
     
-    // Check if user actually connected (not just rejected or no accounts)
     if (!accounts || accounts.length === 0) {
       throw new Error('Please connect your wallet in MetaMask to continue.');
     }
@@ -121,39 +115,54 @@ export class DepositWithdrawSDK {
     this.signer = (this.provider as any).getSigner(0);
     this.userAddress = await this.signer!.getAddress();
 
-    // Get current chain ID from wallet
-    const currentChainId = await (this.provider as any).send('eth_chainId', []);
-    const chainIdNum = parseInt(currentChainId, 16);
+    // Get actual chain ID from wallet
+    const network = await this.provider.getNetwork();
+    const chainIdNum = network.chainId;
     
-    console.log('Connected to network:', {
-      chainId: chainIdNum,
+    console.log('✅ Connected to wallet:', {
+      address: this.userAddress,
+      actualChainId: chainIdNum,
       expectedChainId: this.config.chainId,
-      name: network.name
+      chainName: network.name
     });
 
-    // Force switch to HyperEVM if not already connected
+    // Only warn if not on HyperEVM, don't force switch
     if (chainIdNum !== this.config.chainId) {
-      console.log(`Switching from chain ${chainIdNum} to ${this.config.chainId} (HyperEVM)`);
-      await this.switchToCorrectNetwork();
+      console.log(`ℹ️ Currently on chain ${chainIdNum}. HyperEVM deposits require chain ${this.config.chainId}.`);
     }
 
-    // Initialize wrapper contract
+    // Initialize wrapper contract (will only work on HyperEVM)
     this.wrapperContract = new ethers.Contract(
       this.config.wrapperContractAddress,
       this.wrapperABI,
       this.signer!
     );
 
+    // Return actual chain ID, not expected
     return { 
       address: this.userAddress, 
-      chainId: this.config.chainId 
+      chainId: chainIdNum
     };
   }
 
   /**
    * Check if connected to the correct network
+   * Uses window.ethereum directly for most reliable check
    */
   async isOnCorrectNetwork(): Promise<boolean> {
+    // Use window.ethereum directly for the most reliable chain check
+    if (typeof window !== 'undefined' && window.ethereum) {
+      try {
+        const chainIdHex = await window.ethereum.request({ method: 'eth_chainId' });
+        const chainIdNum = parseInt(chainIdHex, 16);
+        return chainIdNum === this.config.chainId;
+      } catch (error) {
+        console.error('Error checking network via window.ethereum:', error);
+        return false;
+      }
+    }
+    
+    // Fallback to provider if window.ethereum not available
     if (!this.provider) return false;
     try {
       const currentChainId = await (this.provider as any).send('eth_chainId', []);
@@ -213,7 +222,22 @@ export class DepositWithdrawSDK {
    */
   async checkUSDTOApproval(): Promise<{ isApproved: boolean; allowance: string; allowanceFormatted: string }> {
     if (!this.signer || !this.userAddress) {
-      throw new Error('Not connected. Call connect() first.');
+      console.log('Not connected, returning no approval');
+      return {
+        isApproved: false,
+        allowance: '0',
+        allowanceFormatted: '0'
+      };
+    }
+
+    // Only check approval on HyperEVM network
+    if (!(await this.isOnCorrectNetwork())) {
+      console.log('Not on HyperEVM, skipping approval check');
+      return {
+        isApproved: false,
+        allowance: '0',
+        allowanceFormatted: '0'
+      };
     }
 
     try {
@@ -233,7 +257,12 @@ export class DepositWithdrawSDK {
       };
     } catch (error: any) {
       console.error('Failed to check USDTO approval:', error);
-      throw new Error(`Failed to check approval: ${error.message}`);
+      // Return no approval instead of throwing - likely wrong network
+      return {
+        isApproved: false,
+        allowance: '0',
+        allowanceFormatted: '0'
+      };
     }
   }
 
@@ -245,8 +274,9 @@ export class DepositWithdrawSDK {
       throw new Error('Not connected. Call connect() first.');
     }
 
+    // Approval requires HyperEVM network
     if (!(await this.isOnCorrectNetwork())) {
-      await this.switchToCorrectNetwork();
+      throw new Error('Please switch to HyperEVM network to approve tokens.');
     }
 
     try {
@@ -290,14 +320,17 @@ export class DepositWithdrawSDK {
 
   /**
    * Deposit USDTO token with retry logic for rate limiting
+   * Note: For cross-chain deposits, use the LiFi bridge instead of this method
    */
   async depositUSDTO(amount: string): Promise<{ txHash: string; amount: string }> {
     if (!this.signer || !this.wrapperContract) {
       throw new Error('Not connected. Call connect() first.');
     }
 
+    // Direct deposits require HyperEVM network
+    // Cross-chain deposits should use the LiFi bridge (handled in DepositWithdrawModal)
     if (!(await this.isOnCorrectNetwork())) {
-      await this.switchToCorrectNetwork();
+      throw new Error('Please switch to HyperEVM network for direct deposits, or use a supported chain for bridge deposits.');
     }
 
     const maxRetries = 3;
@@ -326,7 +359,7 @@ export class DepositWithdrawSDK {
         console.log('User USDTO balance:', ethers.utils.formatUnits(userBalance, this.USDTO_TOKEN.decimals));
         
         if (userBalance.lt(weiAmount)) {
-          throw new Error(`Insufficient USDTO balance. You have ${ethers.utils.formatUnits(userBalance, this.USDTO_TOKEN.decimals)} USDTO, trying to deposit ${amount} USDTO.`);
+          throw new Error(`Insufficient USDTO balance`);
         }
 
         // Check if we have enough allowance
@@ -414,8 +447,9 @@ export class DepositWithdrawSDK {
       throw new Error('Not connected. Call connect() first.');
     }
 
+    // Withdrawals require HyperEVM network
     if (!(await this.isOnCorrectNetwork())) {
-      await this.switchToCorrectNetwork();
+      throw new Error('Please switch to HyperEVM network to withdraw.');
     }
 
     try {
@@ -476,7 +510,22 @@ export class DepositWithdrawSDK {
    */
   async getUSDTOBalance(): Promise<BalanceInfo> {
     if (!this.wrapperContract || !this.userAddress) {
-      throw new Error('Not connected. Call connect() first.');
+      console.log('Not connected, returning zero balance');
+      return {
+        balance: '0',
+        balanceFormatted: '0.00',
+        tokenSymbol: 'USDTO'
+      };
+    }
+
+    // Only check balance on HyperEVM network
+    if (!(await this.isOnCorrectNetwork())) {
+      console.log('Not on HyperEVM, returning zero balance');
+      return {
+        balance: '0',
+        balanceFormatted: '0.00',
+        tokenSymbol: 'USDTO'
+      };
     }
 
     try {
@@ -491,7 +540,12 @@ export class DepositWithdrawSDK {
       };
     } catch (error: any) {
       console.error('Failed to get USDTO balance:', error);
-      throw new Error(`Failed to get USDTO balance: ${error.message}`);
+      // Return zero instead of throwing - likely wrong network
+      return {
+        balance: '0',
+        balanceFormatted: '0.00',
+        tokenSymbol: 'USDTO'
+      };
     }
   }
 
@@ -507,33 +561,34 @@ export class DepositWithdrawSDK {
    * Get user's USDTO balance in wallet
    */
   async getUSDTOWalletBalance(): Promise<BalanceInfo> {
-    if (!this.provider || !this.userAddress) {
-      throw new Error('Not connected. Call connect() first.');
+    if (!this.signer || !this.userAddress || !this.provider) {
+      console.log('Not connected, returning zero wallet balance');
+      return {
+        balance: '0',
+        balanceFormatted: '0.00',
+        tokenSymbol: 'USDTO'
+      };
+    }
+
+    // Only check wallet balance on HyperEVM network
+    if (!(await this.isOnCorrectNetwork())) {
+      console.log('Not on HyperEVM, returning zero wallet balance');
+      return {
+        balance: '0',
+        balanceFormatted: '0.00',
+        tokenSymbol: 'USDTO'
+      };
     }
 
     try {
-      const network = await this.provider.getNetwork();
-      console.log('Getting USDTO balance on network:', {
-        chainId: network.chainId,
-        expectedChainId: this.config.chainId,
-        userAddress: this.userAddress,
-        tokenAddress: this.USDTO_TOKEN.address
-      });
-
       const tokenContract = new ethers.Contract(
         this.USDTO_TOKEN.address,
         this.erc20ABI,
-        this.provider
+        this.provider!
       );
 
       const balance = await tokenContract.balanceOf(this.userAddress);
       const balanceFormatted = ethers.utils.formatUnits(balance, this.USDTO_TOKEN.decimals);
-
-      console.log('USDTO balance result:', {
-        rawBalance: balance.toString(),
-        formattedBalance: balanceFormatted,
-        tokenSymbol: this.USDTO_TOKEN.symbol
-      });
 
       return {
         balance: balance.toString(),
@@ -543,7 +598,12 @@ export class DepositWithdrawSDK {
       };
     } catch (error: any) {
       console.error('Failed to get USDTO wallet balance:', error);
-      throw new Error(`Failed to get USDTO wallet balance: ${error.message}`);
+      // Return zero instead of throwing - likely wrong network
+      return {
+        balance: '0',
+        balanceFormatted: '0.00',
+        tokenSymbol: 'USDTO'
+      };
     }
   }
 

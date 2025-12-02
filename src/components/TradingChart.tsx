@@ -59,7 +59,8 @@ export default function TradingChart({
   // Track last processed settlement to prevent duplicates
   const processedSettlementsRef = useRef<Set<string>>(new Set());
   const processedFeedSettlementsRef = useRef<Set<string>>(new Set());
-  const [, forceUpdate] = useState({});
+  const [renderTrigger, setRenderTrigger] = useState(0);
+  const forceUpdate = () => setRenderTrigger(prev => prev + 1);
   
   // Check user's bets against settlements by querying Supabase for exact bet data
   useEffect(() => {
@@ -131,7 +132,7 @@ export default function TradingChart({
       // Force re-render IMMEDIATELY if we found local bets
       if (foundLocalBets) {
         console.log(`  ✅ Updated ${localUpdates.length} local bets instantly`);
-        forceUpdate({});
+        forceUpdate();
         
         // Update database in BACKGROUND (don't wait)
         localUpdates.forEach(({ cellKey, status, bet }) => {
@@ -256,7 +257,7 @@ export default function TradingChart({
           }));
         }
         
-        forceUpdate({});
+        forceUpdate();
         
       } catch (error) {
         console.error('❌ Exception checking settlement:', error);
@@ -326,7 +327,7 @@ export default function TradingChart({
         });
 
         if (updated) {
-          forceUpdate({});
+          forceUpdate();
         }
       } catch (error) {
         console.error('❌ Exception checking all bets for settlement:', error);
@@ -352,7 +353,7 @@ export default function TradingChart({
       });
 
       if (removed) {
-        forceUpdate({});
+        forceUpdate();
       }
     }, 1000);
 
@@ -443,6 +444,37 @@ export default function TradingChart({
     isNew?: boolean; // Track if item is newly added
   }>>([]);
   const activityFeedRef = useRef<HTMLDivElement>(null);
+
+  // Load activity feed from localStorage after mount (to avoid hydration mismatch)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const stored = localStorage.getItem('mercury_activity_feed');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          // Filter out old items (older than 1 hour)
+          const oneHourAgo = Date.now() - (60 * 60 * 1000);
+          const filtered = parsed.filter((item: any) => item.timestamp > oneHourAgo);
+          if (filtered.length > 0) {
+            setActivityFeed(filtered);
+          }
+        }
+      } catch (err) {
+        console.error('Error loading activity feed from localStorage:', err);
+      }
+    }
+  }, []);
+
+  // Save activity feed to localStorage whenever it changes
+  useEffect(() => {
+    if (typeof window !== 'undefined' && activityFeed.length > 0) {
+      try {
+        localStorage.setItem('mercury_activity_feed', JSON.stringify(activityFeed));
+      } catch (err) {
+        console.error('Error saving activity feed to localStorage:', err);
+      }
+    }
+  }, [activityFeed]);
 
   const [showOrderPopup, setShowOrderPopup] = useState(false);
   const [orderDetails, setOrderDetails] = useState<{ count: number; cells: Array<{ t: number; priceLevel: number }> } | null>(null);
@@ -585,32 +617,54 @@ export default function TradingChart({
       // Mark as processed
       processedFeedSettlementsRef.current.add(settlementTimeperiodId);
       
-      // Filter to only YOUR bets
-      const yourBets = sourceBets.filter(bet => 
-        address && bet.user_address.toLowerCase() === address.toLowerCase()
-      );
+      // Process ALL bets (not just current user's)
+      const allBets = sourceBets;
       
-      if (yourBets.length === 0) {
-        console.log(`ℹ️ No bets from current user in this settlement`);
+      if (allBets.length === 0) {
+        console.log(`ℹ️ No bets found in this settlement`);
         return;
       }
       
-      console.log(`👤 Found ${yourBets.length} of YOUR bets in this settlement`);
+      console.log(`👥 Found ${allBets.length} bets from ALL users in this settlement`);
         
       const newActivities: typeof activityFeed = [];
       
-      yourBets.forEach(bet => {
+      // Fetch usernames for all bet addresses
+      const userAddresses = Array.from(new Set(allBets.map(bet => bet.user_address)));
+      const usernameMap = new Map<string, string>();
+      
+      try {
+        const { data: profiles } = await supabase
+          .from('users')
+          .select('wallet_address, username');
+        
+        console.log('📋 All users from DB:', profiles);
+        console.log('🔍 Looking for addresses:', userAddresses);
+        
+        if (profiles) {
+          profiles.forEach(profile => {
+            // Store by lowercase address for matching
+            usernameMap.set(profile.wallet_address.toLowerCase(), profile.username);
+          });
+        }
+        
+        console.log('✅ Username map:', Array.from(usernameMap.entries()));
+      } catch (err) {
+        console.error('Error fetching usernames:', err);
+      }
+      
+      allBets.forEach(bet => {
         let betPriceMin: number;
         let betPriceMax: number;
         let amount: number;
-        let multiplier: number;
+        let dbMultiplier: number;
 
         if (usedFallback) {
           // Handle DB format (strings, scaled by 1e8 for price, 1e6 for amount)
           betPriceMin = parseFloat(bet.price_min) / 1e8;
           betPriceMax = parseFloat(bet.price_max) / 1e8;
           amount = parseFloat(bet.amount) / 1e6; // Convert from USDC precision to dollars
-          multiplier = bet.multiplier ? parseFloat(bet.multiplier.toString()) : 1.5; // Default multiplier if missing
+          dbMultiplier = bet.multiplier ? parseFloat(bet.multiplier.toString()) : 0;
         } else {
           // Handle UserBet format from realtimeBets (already in dollars for amount)
           // Calculate price range from price_level
@@ -618,26 +672,95 @@ export default function TradingChart({
           betPriceMax = bet.price_level + priceStep / 2;
           // UserBet.amount is already in dollars (converted in useAllUsersBetsQuery)
           amount = typeof bet.amount === 'string' ? parseFloat(bet.amount) : bet.amount;
-          multiplier = bet.multiplier ? parseFloat(bet.multiplier.toString()) : 1.5; // Default multiplier if missing
+          dbMultiplier = bet.multiplier ? parseFloat(bet.multiplier.toString()) : 0;
         }
-        
-        console.log(`📊 Checking bet: price range [${betPriceMin.toFixed(3)}-${betPriceMax.toFixed(3)}] vs settlement [${settlementPriceMin.toFixed(3)}-${settlementPriceMax.toFixed(3)}], amount: $${amount.toFixed(2)}, multiplier: ${multiplier}`);
         
         // Check for overlap - if price ranges overlap, it's a WIN
         const isWin = settlementPriceMin < betPriceMax && settlementPriceMax > betPriceMin;
         const isYou = address && bet.user_address.toLowerCase() === address.toLowerCase();
-        const username = bet.user_address.slice(0, 6);
+        const username = usernameMap.get(bet.user_address.toLowerCase()) || bet.user_address.slice(0, 6);
+
+        // Store these for positions table lookup
+        bet.isWin = isWin;
+        bet.isYou = isYou;
+        bet.username = username;
+        bet.betPriceMin = betPriceMin;
+        bet.betPriceMax = betPriceMax;
+        bet.amount = amount;
+        bet.dbMultiplier = dbMultiplier;
+      });
+
+      // NOW fetch positions table data for ALL users to get accurate multipliers and payouts
+      const positionsMap = new Map<string, { multiplier: number; payout: number }>();
+      try {
+        const { data: positions } = await supabase
+          .from('user_positions')
+          .select('user_address, timeperiod_id, multiplier, payout_amount, price_min, price_max')
+          .eq('timeperiod_id', settlementTimeperiodId);
+        
+        if (positions) {
+          console.log(`📊 Fetched ${positions.length} positions from DB for settlement ${settlementTimeperiodId}`);
+          positions.forEach(pos => {
+            // Create a key that matches the bet (user + timeperiod + price range)
+            const priceMin = parseFloat(pos.price_min) / 1e8;
+            const priceMax = parseFloat(pos.price_max) / 1e8;
+            const key = `${pos.user_address.toLowerCase()}_${pos.timeperiod_id}_${priceMin.toFixed(2)}_${priceMax.toFixed(2)}`;
+            positionsMap.set(key, {
+              multiplier: parseFloat(pos.multiplier),
+              payout: parseFloat(pos.payout_amount) / 1e6 // Convert from USDC precision
+            });
+          });
+          console.log(`✅ Loaded ${positionsMap.size} positions into map`);
+        }
+      } catch (err) {
+        console.error('Error fetching positions:', err);
+      }
+
+      // Process each bet and create activities
+      allBets.forEach(bet => {
+        const { isWin, isYou, username, betPriceMin, betPriceMax, amount, dbMultiplier } = bet;
+        
+        // Try to get actual data from positions table
+        const posKey = `${bet.user_address.toLowerCase()}_${settlementTimeperiodId}_${betPriceMin.toFixed(2)}_${betPriceMax.toFixed(2)}`;
+        const positionData = positionsMap.get(posKey);
+        
+        let multiplier = dbMultiplier;
+        let payout = amount;
+        
+        if (isWin && positionData) {
+          // Use data from positions table (most accurate)
+          multiplier = positionData.multiplier;
+          payout = positionData.payout;
+          console.log(`✅ Using positions table data for ${isYou ? 'YOU' : '@' + username}: multiplier=${multiplier.toFixed(2)}X, payout=$${payout.toFixed(2)}`);
+        } else if (isWin && isYou) {
+          // Fallback for current user: try selectedCellsRef
+          for (const [cellKey, cell] of Array.from(selectedCellsRef.current.entries())) {
+            const cellTimeperiodId = Math.floor((cell.t + 0.0001) / GRID_SEC) * GRID_SEC;
+            if (cellTimeperiodId === settlementTimeperiodIdNum && cell.multiplier) {
+              multiplier = cell.multiplier;
+              payout = amount * multiplier;
+              console.log(`✅ Using selectedCellsRef for YOU: multiplier=${multiplier.toFixed(2)}X, payout=$${payout.toFixed(2)}`);
+              break;
+            }
+          }
+        } else if (isWin) {
+          // Last resort: calculate from dbMultiplier
+          multiplier = dbMultiplier > 0 ? dbMultiplier : 1.5;
+          payout = amount * multiplier;
+          console.log(`⚠️ Using DB multiplier for ${isYou ? 'YOU' : '@' + username}: multiplier=${multiplier.toFixed(2)}X, payout=$${payout.toFixed(2)}`);
+        }
+        
+        console.log(`📊 Checking bet: price range [${betPriceMin.toFixed(3)}-${betPriceMax.toFixed(3)}] vs settlement [${settlementPriceMin.toFixed(3)}-${settlementPriceMax.toFixed(3)}], amount: $${amount.toFixed(2)}, multiplier: ${multiplier.toFixed(2)}X`);
 
         if (isWin) {
-          // User WON - show "@username won $payout"
-          const payout = amount * multiplier;
+          // User WON - payout already calculated above from positions table
           console.log(`🎉 Winner: ${isYou ? 'YOU' : '@' + username} won $${payout.toFixed(2)} (bet: $${amount.toFixed(2)} × ${multiplier.toFixed(1)}X)`);
 
           newActivities.push({
             id: `won_${bet.user_address}_${settlementTimeperiodId}_${Date.now()}_${Math.random()}`,
             type: 'won',
             username: isYou ? undefined : username,
-            amount: payout, // Show the PAYOUT (amount * multiplier)
+            amount: payout, // Show the PAYOUT from positions table
             multiplier,
             isYou: !!isYou,
             timestamp: Date.now(),
@@ -695,6 +818,85 @@ export default function TradingChart({
     
     updateActivityFeedFromSettlement();
   }, [settlementsMessage, address, realtimeBets, priceStep]);
+
+  // Real-time bet placement tracking: DISABLED - Only show settlements (wins/losses)
+  // We don't show "added to pool" for bet placements anymore, only for losses after settlement
+  const processedBetIdsRef = useRef<Set<string>>(new Set());
+  
+  // Commented out bet placement tracking - we only show settlement results
+  /*
+  useEffect(() => {
+    if (!realtimeBets || realtimeBets.length === 0) return;
+    
+    // Check for new bets
+    realtimeBets.forEach(async (bet) => {
+      const betId = `${bet.grid_id}_${bet.user_address}_${bet.created_at}`;
+      
+      // Skip if already processed
+      if (processedBetIdsRef.current.has(betId)) return;
+      
+      processedBetIdsRef.current.add(betId);
+      
+      const isYou = address && bet.user_address.toLowerCase() === address.toLowerCase();
+      
+      // Fetch username for the user
+      let username = bet.user_address.slice(0, 6);
+      try {
+        const { data: profile } = await supabase
+          .from('users')
+          .select('username')
+          .eq('wallet_address', bet.user_address.toLowerCase())
+          .maybeSingle();
+        
+        if (profile?.username) {
+          username = profile.username;
+        }
+      } catch (err) {
+        console.error('Error fetching username:', err);
+      }
+      
+      // Add bet placement to activity feed
+      const newActivity = {
+        id: `bet_${betId}_${Date.now()}_${Math.random()}`,
+        type: 'pool_added' as const,
+        username: isYou ? undefined : username,
+        amount: bet.amount,
+        isYou: !!isYou,
+        timestamp: Date.now(),
+        isNew: true
+      };
+      
+      console.log(`💰 New bet placed: ${isYou ? 'YOU' : '@' + username} added $${bet.amount.toFixed(2)} to pool`);
+      
+      setActivityFeed((prev) => {
+        // Check if this bet is already in feed (avoid duplicates)
+        const exists = prev.some(item => item.id.includes(betId));
+        if (exists) return prev;
+        
+        const combined = [newActivity, ...prev];
+        return combined.slice(0, 20); // Keep last 20 items
+      });
+      
+      // Auto-scroll to top
+      setTimeout(() => {
+        if (activityFeedRef.current) {
+          activityFeedRef.current.scrollTop = 0;
+        }
+      }, 10);
+      
+      // Remove highlight after 3 seconds
+      setTimeout(() => {
+        setActivityFeed((prev) => 
+          prev.map(item => 
+            item.id === newActivity.id 
+              ? { ...item, isNew: false }
+              : item
+          )
+        );
+      }, 3000);
+    });
+  }, [realtimeBets, address]);
+  */
 
   // Chart configuration
   const DURATION = CHART_CONFIG.DURATION_SECONDS - 6; // Chart history duration (reduced by 6 seconds for better performance)
@@ -980,6 +1182,87 @@ export default function TradingChart({
     }
   }, [wsPrice]);
 
+  // REAL-TIME BET NOTIFICATIONS - Show "Added to pool" immediately when bets are placed
+  const instantBetNotificationsRef = useRef<Set<string>>(new Set());
+  
+  useEffect(() => {
+    if (!realtimeBets || realtimeBets.length === 0) return;
+    
+    // Find NEW bets that we haven't processed yet
+    const newBets = realtimeBets.filter(bet => {
+      const betId = `${bet.user_address}_${bet.timeperiod_id}_${bet.price_level}_${bet.created_at}`;
+      return !instantBetNotificationsRef.current.has(betId);
+    });
+    
+    if (newBets.length === 0) return;
+    
+    // Fetch usernames for the new bets
+    const fetchAndShowBets = async () => {
+      const userAddresses = Array.from(new Set(newBets.map(bet => bet.user_address)));
+      const usernameMap = new Map<string, string>();
+      
+      try {
+        const { data: profiles } = await supabase
+          .from('users')
+          .select('wallet_address, username');
+        
+        if (profiles) {
+          profiles.forEach(profile => {
+            usernameMap.set(profile.wallet_address.toLowerCase(), profile.username);
+          });
+        }
+      } catch (err) {
+        console.error('Error fetching usernames for real-time bets:', err);
+      }
+      
+      const newActivities: typeof activityFeed = [];
+      
+      newBets.forEach(bet => {
+        const betId = `${bet.user_address}_${bet.timeperiod_id}_${bet.price_level}_${bet.created_at}`;
+        instantBetNotificationsRef.current.add(betId);
+        
+        const isYou = address && bet.user_address.toLowerCase() === address.toLowerCase();
+        const username = usernameMap.get(bet.user_address.toLowerCase()) || bet.user_address.slice(0, 6);
+        const amount = typeof bet.amount === 'string' ? parseFloat(bet.amount) : bet.amount;
+        
+        console.log(`💰 INSTANT bet notification: ${isYou ? 'YOU' : '@' + username} added $${amount.toFixed(2)} to pool`);
+        
+        newActivities.push({
+          id: `instant_${betId}_${Date.now()}`,
+          type: 'pool_added',
+          username: isYou ? undefined : username,
+          amount: amount,
+          isYou: !!isYou,
+          timestamp: Date.now(),
+          isNew: true
+        });
+      });
+      
+      if (newActivities.length > 0) {
+        setActivityFeed((prev) => {
+          const combined = [...newActivities, ...prev];
+          return combined.slice(0, 20);
+        });
+        
+        // Auto-scroll to top
+        setTimeout(() => {
+          if (activityFeedRef.current) {
+            activityFeedRef.current.scrollTop = 0;
+          }
+        }, 10);
+        
+        // Remove highlight after 3 seconds
+        setTimeout(() => {
+          setActivityFeed((prev) => 
+            prev.map(item => ({ ...item, isNew: false }))
+          );
+        }, 3000);
+      }
+    };
+    
+    fetchAndShowBets();
+  }, [realtimeBets, address]);
+
   // Process real-time bets and group by grid_id (EXCLUDE current user's bets)
   useEffect(() => {
     if (realtimeBets && realtimeBets.length > 0) {
@@ -1066,7 +1349,7 @@ export default function TradingChart({
 
         if (restoredCount > 0) {
           console.log('⚡ Instantly restored', restoredCount, 'bets from localStorage');
-          forceUpdate({});
+          forceUpdate();
         }
       }
     } catch (error) {
@@ -1182,7 +1465,7 @@ export default function TradingChart({
         });
 
         console.log('✅ Restored', restoredCount, 'bets with their Win/Loss status');
-        forceUpdate({});
+        forceUpdate();
 
       } catch (error) {
         console.error('❌ Exception loading user bets:', error);
@@ -1264,7 +1547,7 @@ export default function TradingChart({
               // This is the FIRST bet in this grid (estimated = new bet's shares)
               if (timeUntilStart <= 15) effectiveBasePrice = 0.66;
               else if (timeUntilStart <= 25) effectiveBasePrice = 0.5;
-              else if (timeUntilStart <= 40) effectiveBasePrice = 0.35;
+              else if (timeUntilStart < 40) effectiveBasePrice = 0.35;
               else effectiveBasePrice = 0.2;
             } else {
               // Subsequent bets: use MAX(time-based, 0.2) = 0.2
@@ -1635,7 +1918,7 @@ export default function TradingChart({
 
       // Price labels on left - draw for all visible levels
       ctx.fillStyle = CHART_COLORS.TEXT;
-      ctx.font = "300 13px 'Geist Mono',monospace,monospace";
+      ctx.font = "300 13px 'Geist',sans-serif";
       ctx.textAlign = "right";
       for (let i = 0; i < numPriceLevels; i++) {
         const priceLevel = startPrice + i * priceStep;
@@ -1717,7 +2000,7 @@ export default function TradingChart({
       // Position NOW text below the triangle with spacing
       const textY = triangleBottomY + 10; // Position below triangle
       
-      ctx.font = "500 9px 'Geist Mono',monospace";
+      ctx.font = "500 9px 'Geist',sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       
@@ -1804,19 +2087,19 @@ export default function TradingChart({
 
       // Connection status indicator
       ctx.fillStyle = isConnected ? "#00ff24" : "#ff3333";
-      ctx.font = "12px 'Geist Mono',monospace";
+      ctx.font = "12px 'Geist',sans-serif";
       ctx.textAlign = "left";
       // Order placement status
       if (isPlacingOrder) {
         ctx.fillStyle = "#ffa500";
-        ctx.font = "12px 'Geist Mono',monospace";
+        ctx.font = "12px 'Geist',sans-serif";
         ctx.textAlign = "left";
         ctx.fillText("🔄 Placing Order...", 20, 50);
       }
 
       // Time labels on top
       ctx.fillStyle = "rgba(238, 237, 236, 1)";
-      ctx.font = "300 13px 'Geist Mono',monospace,monospace";
+      ctx.font = "300 13px 'Geist',sans-serif";
       ctx.textAlign = "center";
       for (let i = -Math.ceil(w / gridW) - 1; i < Math.ceil(w / gridW) + 2; i++) {
         const x = centerX + i * gridW - offsetX - GRID_SEC * pxPerSec;
@@ -2086,9 +2369,9 @@ export default function TradingChart({
               // Draw multiplier when time label is NOT visible in the band OR when panning
             ctx.fillStyle = multiplierTextColor;
             
-            // Figma typography: Inter, 900 weight, italic, 14px, -5% letter spacing
+            // Figma typography: Geist, 900 weight, italic, 14px, -5% letter spacing
             // Canvas doesn't support letter-spacing directly, so we approximate with font styling
-            ctx.font = "900 italic 14px Inter, sans-serif";
+            ctx.font = "900 italic 14px Geist, sans-serif";
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
             
@@ -2245,7 +2528,7 @@ export default function TradingChart({
             
             // Show negative bet amount (how much user lost)
             const betAmount = selected.betAmount || 0.20; // Default to $0.20 if not set
-            ctx.font = "900 italic 16px Inter, sans-serif";
+            ctx.font = "900 italic 16px Geist, sans-serif";
             ctx.fillText(`-$${betAmount.toFixed(2)}`, cellCenterX, cellCenterY);
             
             ctx.textAlign = "left";
@@ -2288,7 +2571,7 @@ export default function TradingChart({
                 // ctx.fillText(`${selected.multiplier.toFixed(2)}X`, selLeft + gridW / 2, multiplierY);
                 
                 // Draw payout amount
-                ctx.font = "300 15px 'Geist Mono',monospace";
+                ctx.font = "300 15px 'Geist',sans-serif";
                 ctx.fillText(`$${selected.payout.toFixed(2)}`, selLeft + gridW / 2, selTop + gridH / 2);
                 
                 // Draw next user's multiplier (RED) below - only for pending (calculating...)
@@ -2394,12 +2677,12 @@ export default function TradingChart({
               
               // Show only payout if available
               if (selected.payout) {
-                // Figma typography: Inter, 900 weight, italic, 18px
-                ctx.font = "900 italic 16px Inter, sans-serif";
+                // Figma typography: Geist, 900 weight, italic, 18px
+                ctx.font = "900 italic 16px Geist, sans-serif";
                 ctx.fillText(`$${selected.payout.toFixed(2)}`, cellCenterX, cellCenterY);
               } else {
                 // Fallback to price
-                ctx.font = "900 italic 16px Inter, sans-serif";
+                ctx.font = "900 italic 16px Geist, sans-serif";
                 ctx.fillText(`$${selected.priceLevel.toFixed(priceDecimals)}`, cellCenterX, cellCenterY);
               }
               ctx.textAlign = "left";
@@ -2489,7 +2772,7 @@ export default function TradingChart({
               ctx.shadowBlur = 0;
               ctx.shadowColor = "transparent";
               
-              // Draw only payout amount in center - Figma specs: Inter 900 italic 18px, green color
+              // Draw only payout amount in center - Figma specs: Geist 900 italic 18px, green color
               ctx.fillStyle = "#00ff24";
               ctx.textAlign = "center";
               ctx.textBaseline = "middle";
@@ -2500,12 +2783,12 @@ export default function TradingChart({
               
               // Show only payout if available
               if (selected.payout) {
-                // Figma typography: Inter, 900 weight, italic, 18px
-                ctx.font = "900 italic 16px Inter, sans-serif";
+                // Figma typography: Geist, 900 weight, italic, 18px
+                ctx.font = "900 italic 16px Geist, sans-serif";
                 ctx.fillText(`$${selected.payout.toFixed(2)}`, cellCenterX, cellCenterY);
               } else {
                 // Fallback to price
-                ctx.font = "900 italic 16px Inter, sans-serif";
+                ctx.font = "900 italic 16px Geist, sans-serif";
                 ctx.fillText(`$${selected.priceLevel.toFixed(priceDecimals)}`, cellCenterX, cellCenterY);
               }
               
@@ -2540,7 +2823,7 @@ export default function TradingChart({
                 gradient.addColorStop(0.54, '#00B019');
                 gradient.addColorStop(1, '#FAFAFA');
                 
-                ctx.font = "italic 800 24px 'Geist Mono',monospace";
+                ctx.font = "italic 800 24px 'Geist',sans-serif";
                 ctx.textAlign = "center";
                 ctx.letterSpacing = "-2px";
                 
@@ -2636,7 +2919,7 @@ export default function TradingChart({
             
             // Draw NEXT multiplier centered in RED
             ctx.fillStyle = "#FF4444";  // Bright red
-            ctx.font = "bold 14px 'Geist Mono',monospace";
+            ctx.font = "bold 14px 'Geist',sans-serif";
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
             const centerX = selLeftRounded + gridW / 2;
@@ -2896,7 +3179,7 @@ export default function TradingChart({
           const userBetAmount = savedAmount ? parseFloat(savedAmount) : 0.2; // Default to $0.2
           
           // Calculate timeperiod for this hovered cell
-          const hoverCellTime = hover.t- timeOffsetRef.current;
+          const hoverCellTime = hover.t - timeOffsetRef.current;
           const hoverTimeperiodId = Math.floor(hoverCellTime / GRID_SEC) * GRID_SEC;
           
           // Calculate time until start and get time bucket
@@ -2971,8 +3254,8 @@ export default function TradingChart({
           const hoverPayoutTextColor = multiplierColor === "#FFDA00" ? "#FFDA00" : "#FFFFFF";
           ctx.fillStyle = hoverPayoutTextColor;
           
-          // Figma typography: Inter, 900 weight, italic, 18px, -5% letter spacing
-          ctx.font = "900 italic 16px Inter, sans-serif";
+          // Figma typography: Geist, 900 weight, italic, 18px, -5% letter spacing
+          ctx.font = "900 italic 16px Geist, sans-serif";
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
           
@@ -3091,7 +3374,7 @@ export default function TradingChart({
       
       // Draw price text
       ctx.fillStyle = "#FAFAFA";
-      ctx.font = "bold 13px 'Geist Mono',monospace";
+      ctx.font = "bold 13px 'Geist',sans-serif";
       ctx.textAlign = "left";
       ctx.fillText(`$${price.toFixed(priceDecimals)}`, badgeX + 8, currentPriceDotY + 4);
 
@@ -3649,7 +3932,7 @@ export default function TradingChart({
       
       // Show "Placing Order" loader
       setIsWaitingForGrid(true);
-      forceUpdate({}); // Force re-render to show pending state
+      forceUpdate(); // Force re-render to show pending state
       
       // Notify parent component if callback is provided
       if (onCellSelect) {
@@ -3700,7 +3983,7 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
                 if (cellToUpdate && realNextMultiplier !== undefined) {
                   cellToUpdate.nextUserMultiplier = realNextMultiplier;
                   console.log(`🔴 Updated cell with REAL nextUserMultiplier: ${realNextMultiplier.toFixed(2)}x`);
-                  forceUpdate({}); // Trigger re-render to show RED multiplier
+                  forceUpdate(); // Trigger re-render to show RED multiplier
                 }
               }, 1500); // Wait 1.5s for database to update
               
@@ -3748,7 +4031,7 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
               selectedCellsRef.current.delete(cellKey);
               setIsWaitingForGrid(false);
             }
-            forceUpdate({}); // Force re-render
+            forceUpdate(); // Force re-render
           }
         }).catch((error) => {
           // Error placing order
@@ -3773,7 +4056,7 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
           
           selectedCellsRef.current.delete(cellKey);
           setIsWaitingForGrid(false);
-          forceUpdate({});
+          forceUpdate();
         });
       } else {
         // No callback provided, hide loader after a short delay
@@ -3865,7 +4148,7 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
           padding: 'clamp(6px, 1%, 8px)',
           background: (!isScrolled || isRecenteringRef.current) ? 'transparent' : '#091c0d',
           border: (!isScrolled || isRecenteringRef.current) ? '1px solid #00FF241F' : '1px solid #00FF241F',
-          fontFamily: "'Geist Mono', monospace",
+          fontFamily: "'Geist', sans-serif",
           fontSize: 'clamp(10px, 1vw, 12px)',
           fontWeight: 300,
           color: (!isScrolled || isRecenteringRef.current) ? '#4a4a4a' : '#ffffff',
@@ -3908,20 +4191,20 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
         ref={activityFeedRef}
         style={{
           position: 'absolute',
-          bottom: '20%',
+          bottom: '0%',
           left: 'clamp(40px, 5%, 80px)',
           width: 'clamp(200px, 20%, 300px)',
           maxHeight: '25%',
           padding: '8px',
           zIndex: 9999,
-          fontFamily: "'Geist Mono', monospace",
+          fontFamily: "'Geist', sans-serif",
           fontSize: 'clamp(11px, 1vw, 14px)',
           display: 'flex',
           flexDirection: 'column',
           gap: '8px',
           background: 'transparent',
           borderRadius: '8px',
-          overflowY: 'auto',
+          overflowY: 'hidden',
           overflowX: 'hidden',
           scrollBehavior: 'smooth',
           pointerEvents: 'none',
@@ -3966,7 +4249,7 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
                           fontSize: '14px',
                           fontWeight: 700,
                           fontStyle: 'italic',
-                        }}>${activity.amount.toFixed(2)} ({activity.multiplier?.toFixed(0)}X)</span>
+                        }}>${activity.amount.toFixed(2)} ({activity.multiplier?.toFixed(1)}X)</span>
                       </>
                     ) : (
                       <>
@@ -3985,23 +4268,41 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
                           fontSize: '14px',
                           fontWeight: 700,
                           fontStyle: 'italic',
-                        }}>${activity.amount.toFixed(2)} ({activity.multiplier?.toFixed(0)}X)</span>
+                        }}>${activity.amount.toFixed(2)} ({activity.multiplier?.toFixed(1)}X)</span>
                       </>
                     )}
                   </>
                 ) : (
                   <>
-                    <span style={{ 
-                      color: '#4D504D',
-                      fontSize: '14px',
-                      fontWeight: 400,
-                    }}>Added to pool</span>{' '}
-                    <span style={{ 
-                      color: '#01690F',
-                      fontSize: '14px',
-                      fontWeight: 700,
-                      fontStyle: 'italic',
-                    }}>+${activity.amount.toFixed(2)}</span>
+                    {activity.isYou ? (
+                      <>
+                        <span style={{ 
+                          color: '#4D504D',
+                          fontSize: '14px',
+                          fontWeight: 400,
+                        }}>Added to pool</span>{' '}
+                        <span style={{ 
+                          color: '#01690F',
+                          fontSize: '14px',
+                          fontWeight: 700,
+                          fontStyle: 'italic',
+                        }}>+${activity.amount.toFixed(2)}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span style={{ 
+                          color: '#4D504D',
+                          fontSize: '14px',
+                          fontWeight: 400,
+                        }}>Added to pool</span>{' '}
+                        <span style={{ 
+                          color: '#01690F',
+                          fontSize: '14px',
+                          fontWeight: 700,
+                          fontStyle: 'italic',
+                        }}>+${activity.amount.toFixed(2)}</span>
+                      </>
+                    )}
                   </>
                 )}
               </span>
@@ -4102,7 +4403,7 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
         color: '#fff',
         fontSize: 14,
         fontWeight: 300,
-        fontFamily: 'Geist Mono',
+        fontFamily: 'Geist',
         lineHeight: 1,
         textTransform: 'lowercase',
         transform: 'translateY(-0.5px)', // tiny vertical nudge like the mock
@@ -4183,7 +4484,7 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
         color: '#fff',
         fontSize: 14,
         fontWeight: 300,
-        fontFamily: 'Geist Mono',
+        fontFamily: 'Geist',
         lineHeight: 1,
         textTransform: 'lowercase',
         transform: 'translateY(-0.5px)',
@@ -4258,7 +4559,7 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
                 color: '#fff',
                 fontSize: 14,
                 fontWeight: 300,
-                fontFamily: 'Geist Mono',
+                fontFamily: 'Geist',
                 lineHeight: 1,
                 textTransform: 'lowercase',
                 transform: 'translateY(-0.5px)',
@@ -4332,7 +4633,7 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
                 color: '#fff',
                 fontSize: 14,
                 fontWeight: 300,
-                fontFamily: 'Geist Mono',
+                fontFamily: 'Geist',
                 lineHeight: 1,
                 textTransform: 'lowercase',
                 transform: 'translateY(-0.5px)',

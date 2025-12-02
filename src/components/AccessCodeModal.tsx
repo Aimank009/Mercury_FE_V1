@@ -46,7 +46,7 @@ export default function AccessCodeModal({ isOpen, onSuccess }: AccessCodeModalPr
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-[12px] flex items-center justify-center z-[10000] animate-[fadeIn_0.3s_ease]">
+    <div className="fixed inset-0 bg-black/30 backdrop-blur-[12px] flex items-center justify-center z-[10000] animate-[fadeIn_0.3s_ease]">
       <div 
         className="relative flex flex-col items-center p-8"
         style={{
@@ -82,7 +82,7 @@ export default function AccessCodeModal({ isOpen, onSuccess }: AccessCodeModalPr
         </button>
 
         <div className="text-center -mt-2 flex flex-col items-center">
-          <p className="text-[#6F7681] text-[18px] mb-2 font-400 tracking-wide font-['Geist_Mono'] ">Welcome to</p>
+          <p className="text-[#6F7681] text-[18px] mb-2 font-400 tracking-wide font-geist">Welcome to</p>
           <img 
             src="/image copy.png" 
             alt="MERCURY" 
@@ -95,7 +95,7 @@ export default function AccessCodeModal({ isOpen, onSuccess }: AccessCodeModalPr
 
         <div className="w-full flex-1 flex flex-col justify-between px-4 pb-2 mt-8">
           <div className="flex flex-col gap-2 mt-2">
-            <label className="text-white text-[18px] font-500 text-center font-['Geist_Mono']">Enter Access Code:</label>
+            <label className="text-white text-[18px] font-500 text-center font-geist">Enter Access Code:</label>
             <input
               type="text"
               value={code}
@@ -120,14 +120,14 @@ export default function AccessCodeModal({ isOpen, onSuccess }: AccessCodeModalPr
               }}
             />
             {error && (
-                <p className="text-[#FF5E5E] text-[14px] font-400 text-center font-['Geist_Mono'] mt-2 tracking-wide">{error}</p>
+                <p className="text-[#FF5E5E] text-[14px] font-400 text-center font-geist mt-2 tracking-wide">{error}</p>
             )}
           </div>
 
           <button
             onClick={handleSubmit}
             disabled={isLoading || !code}
-            className="w-[359px] -ml-6 bg-[#00FF24]/80 hover:bg-[#00cc1f]  disabled:cursor-not-allowed text-black font-500 py-3 rounded-[8px] transition-all duration-200 font-['Geist_Mono']  text-[16px] tracking-wide"
+            className="w-[359px] -ml-6 bg-[#00FF24]/80 hover:bg-[#00cc1f]  disabled:cursor-not-allowed text-black font-500 py-3 rounded-[8px] transition-all duration-200 font-geist text-[16px] tracking-wide"
             style={{
                 boxShadow: '0px 0px 20px rgba(0, 255, 36, 0.2)'
             }}

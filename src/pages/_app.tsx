@@ -1,7 +1,6 @@
 import '../styles/globals.css';
 import '@rainbow-me/rainbowkit/styles.css';
 import type { AppProps } from 'next/app';
-import { GeistMono } from 'geist/font/mono';
 import { useEffect } from 'react';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -147,12 +146,7 @@ function MyApp({ Component, pageProps }: AppProps) {
   }, []);
 
   return (
-    <div style={{ fontFamily: GeistMono.style.fontFamily }}>
-      <style jsx global>{`
-        :root {
-          --font-geist-mono: ${GeistMono.style.fontFamily};
-        }
-      `}</style>
+    <div>
       <WagmiProvider config={config}>
         <QueryClientProvider client={client}>
           <RainbowKitProvider>

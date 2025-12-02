@@ -154,7 +154,7 @@ export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSe
             >
               <img src="/image.png" alt="" className="w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6" />
             </div>
-            <span className="font-['Geist_Mono',monospace] text-[12px] sm:text-[14px] md:text-[16px] font-normal text-white whitespace-nowrap">HYPE / USDT</span>
+            <span className="font-['Geist',sans-serif] text-[12px] sm:text-[14px] md:text-[16px] font-normal text-white whitespace-nowrap">HYPE / USDT</span>
             <div className="mx-1 sm:mx-1.5 md:mx-2 flex items-center justify-center">
               <svg className="w-3 h-1.5 sm:w-3.5 sm:h-2 md:w-[15px] md:h-[8px]" viewBox="0 0 15 8" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <g filter="url(#filter0_i_597_35381)">
@@ -183,7 +183,7 @@ export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSe
                 }}
                 ref={tradingPairDropdownRef}
               >
-                <div className=" flex justify-center px-2 py-3 text-sm text-white/60 font-['Geist_Mono',monospace]">
+                <div className=" flex justify-center px-2 py-3 text-sm text-white/60 font-['Geist',sans-serif]">
                   Coming soon
                 </div>
               </div>,
@@ -193,14 +193,14 @@ export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSe
           </div>
         </div>
        <div className="flex flex-col gap-1">
-          <div className="text-[10px] sm:text-[11px] md:text-[12px] text-white/40 font-normal font-['Geist_Mono',monospace]">Price</div>
-          <div className="font-['Geist_Mono',monospace] flex justify-center text-[14px] sm:text-[16px] md:text-[18px] font-medium text-[#eeedec]">
+          <div className="text-[10px] sm:text-[11px] md:text-[12px] text-white/40 font-normal font-['Geist',sans-serif]">Price</div>
+          <div className="font-['Geist',sans-serif] flex justify-center text-[14px] sm:text-[16px] md:text-[18px] font-medium text-[#eeedec]">
             ${currentPrice > 0 ? (currentPrice).toFixed(3) : '38.120'}
           </div>
         </div>
         <div className="flex flex-col gap-1 px-1 sm:px-2">
-          <div className="text-[10px] sm:text-[11px] md:text-[12px] text-white/40 font-normal font-['Geist_Mono',monospace]">TVL</div>
-          <div className="font-['Geist_Mono',monospace] flex justify-center text-[14px] sm:text-[16px] md:text-[18px] font-medium text-[#eeedec]">$40,456.67</div>
+          <div className="text-[10px] sm:text-[11px] md:text-[12px] text-white/40 font-normal font-['Geist',sans-serif]">TVL</div>
+          <div className="font-['Geist',sans-serif] flex justify-center text-[14px] sm:text-[16px] md:text-[18px] font-medium text-[#eeedec]">$40,456.67</div>
         </div>
       </div>
      
@@ -223,7 +223,7 @@ export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSe
             className="flex items-center gap-1 sm:gap-1.5 md:gap-2 px-1.5 sm:px-2 md:px-3 py-1.5 border-t border-[#FFFFFF33] rounded-[12px] bg-[#1b301f]  cursor-pointer transition-all duration-200 hover:opacity-90"
             ref={amountButtonRef}
           >
-            <span className="font-['Geist_Mono',monospace] text-[12px] sm:text-[14px] md:text-base font-semibold text-white whitespace-nowrap">
+            <span className="font-['Geist',sans-serif] text-[12px] sm:text-[14px] md:text-base font-semibold text-white whitespace-nowrap">
               ${amount.toFixed(2)}
             </span>
             <div 
@@ -270,7 +270,7 @@ export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSe
                       <button
                         key={amt}
                         onClick={() => handleQuickAmount(amt)}
-                        className={`flex-1 border border-[#EEEDEC33] px-4 py-2 text-base font-['Geist_Mono',monospace] tracking-tight transition rounded-lg ${
+                        className={`flex-1 border border-[#EEEDEC33] px-4 py-2 text-base font-['Geist',sans-serif] tracking-tight transition rounded-lg ${
                           amount === amt
                             ? 'bg-mercury-box text-white'
                             : 'bg-mercury-box text-white/60 hover:bg-mercury-box/90 hover:text-white/80'
@@ -285,7 +285,7 @@ export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSe
                       <button
                         key={amt}
                         onClick={() => handleQuickAmount(amt)}
-                        className={`flex-1 border border-[#EEEDEC33] px-4 py-2 text-base font-['Geist_Mono',monospace] tracking-tight transition rounded-lg ${
+                        className={`flex-1 border border-[#EEEDEC33] px-4 py-2 text-base font-['Geist',sans-serif] tracking-tight transition rounded-lg ${
                           amount === amt
                             ? 'bg-mercury-box text-white'
                             : 'bg-mercury-box text-white/60 hover:bg-mercury-box/90 hover:text-white/80'
@@ -318,8 +318,8 @@ export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSe
         </div>
 
         <div className="flex flex-col gap-1 min-w-0 flex-1">
-          <div className="text-[10px] sm:text-[11px] md:text-[12px] text-white/40 font-normal font-['Geist_Mono',monospace] px-1 sm:px-2 md:px-3">Market Liquidity</div>
-          <div className="font-['Geist_Mono',monospace] flex justify-center text-[14px] sm:text-[16px] md:text-[18px] font-medium text-[#eeedec] truncate">
+          <div className="text-[10px] sm:text-[11px] md:text-[12px] text-white/40 font-normal font-['Geist',sans-serif] px-1 sm:px-2 md:px-3">Market Liquidity</div>
+          <div className="font-['Geist',sans-serif] flex justify-center text-[14px] sm:text-[16px] md:text-[18px] font-medium text-[#eeedec] truncate">
             ${isLoading ? '...' : formatLiquidity(liquidityPool)}
           </div>
         </div>

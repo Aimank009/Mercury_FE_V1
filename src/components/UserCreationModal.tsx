@@ -165,7 +165,7 @@ export default function UserCreationModal({ isOpen, onSuccess, walletAddress }: 
   // Show loading while checking for existing user
   if (isCheckingExistingUser && isOpen) {
     return (
-      <div className="fixed inset-0 bg-black/40 backdrop-blur-[12px] flex items-center justify-center z-[10000]">
+      <div className="fixed inset-0 bg-black/30 backdrop-blur-[12px] flex items-center justify-center z-[10000]">
         <div className="text-white text-sm font-mono">Checking account...</div>
       </div>
     );
@@ -174,7 +174,7 @@ export default function UserCreationModal({ isOpen, onSuccess, walletAddress }: 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-[12px] flex items-center justify-center z-[10000] animate-[fadeIn_0.3s_ease]">
+    <div className="fixed inset-0 bg-black/30 backdrop-blur-[12px] flex items-center justify-center z-[10000] animate-[fadeIn_0.3s_ease]">
       <div 
         className="relative flex flex-col items-center p-8"
         style={{
@@ -209,7 +209,7 @@ export default function UserCreationModal({ isOpen, onSuccess, walletAddress }: 
         </button>
 
         <div className="text-center -mt-2 flex flex-col items-center w-full">
-          <p className="text-[#6F7681] text-[18px] mb-2 font-500 tracking-wide font-['Geist_Mono']">Welcome to</p>
+          <p className="text-[#6F7681] text-[18px] mb-2 font-500 tracking-wide font-geist">Welcome to</p>
            <img 
             src="/image copy.png" 
             alt="MERCURY" 
@@ -238,7 +238,7 @@ export default function UserCreationModal({ isOpen, onSuccess, walletAddress }: 
             )}
           </div>
 
-          <p className="text-white text-[18px] font-400 mt-4 font-['Geist_Mono']">What should we call you ?</p>
+          <p className="text-white text-[18px] font-400 mt-4 font-geist">What should we call you ?</p>
         </div>
 
         <div className="w-full flex-1 flex flex-col justify-between px-4 pb-2 mt-2">
@@ -277,20 +277,20 @@ export default function UserCreationModal({ isOpen, onSuccess, walletAddress }: 
                         </svg>
                     )}
                 </div>
-                <span className="text-[#888] text-[16px] font-400 font-['Geist_Mono']">
+                <span className="text-[#888] text-[16px] font-400 font-geist">
                     Agree to <span className="underline cursor-pointer hover:text-white">Terms</span> and <span className="underline cursor-pointer hover:text-white">Policy</span>
                 </span>
             </div>
 
             {error && (
-                <p className="text-[#FF3B30] text-[16px] font-400 text-center font-['Geist_Mono'] tracking-wide">{error}</p>
+                <p className="text-[#FF3B30] text-[16px] font-400 text-center font-geist tracking-wide">{error}</p>
             )}
           </div>
 
           <button
             onClick={handleSubmit}
             disabled={isLoading || !username || !agreedToTerms}
-            className="w-[359px] -ml-6 bg-[#00FF24]/80 hover:bg-[#00cc1f] disabled:opacity-50 disabled:cursor-not-allowed text-black font-500 py-3 rounded-[8px] transition-all duration-200 font-['Geist_Mono'] text-[16px] tracking-wide mt-6"
+            className="w-[359px] -ml-6 bg-[#00FF24]/80 hover:bg-[#00cc1f] disabled:opacity-50 disabled:cursor-not-allowed text-black font-500 py-3 rounded-[8px] transition-all duration-200 font-geist text-[16px] tracking-wide mt-6"
             style={{
                 boxShadow: '0px 0px 20px rgba(0, 255, 36, 0.2)'
             }}

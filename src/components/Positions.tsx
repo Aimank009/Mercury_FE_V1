@@ -41,7 +41,7 @@ const ActionButtons = memo(({
   <div className="flex items-center gap-2 md:gap-4">
     {isResolved && (
       <button
-        className="flex items-center gap-1 text-[9px] md:text-[11px] border rounded-[24px] bg-white/5 text-[#828892] px-2 md:px-3 py-1 md:py-2 transition hover:text-[#00ff24]"
+        className="flex items-center gap-1 text-[9px] md:text-[11px] border rounded-[24px] bg-[#1A1A1A] text-[#767676] background-blur-sm px-2 md:px-3 py-1 md:py-2 transition hover:text-[#00ff24]"
         onClick={() => onShare(positionId)}
       >
         <svg width="11" height="11" viewBox="0 0 11 11" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -51,7 +51,7 @@ const ActionButtons = memo(({
       </button>
     )}
     <button
-      className="flex items-center gap-1 text-[9px] md:text-[11px] border rounded-[24px] bg-white/5 text-[#828892] px-2 md:px-3 py-1 md:py-2 transition hover:text-[#00ff24]"
+      className="flex items-center gap-1 text-[9px] md:text-[11px] border rounded-[24px] bg-[#1A1A1A] text-[#767676] background-blur-sm px-2 md:px-3 py-1 md:py-2 transition hover:text-[#00ff24]"
       onClick={() => onHelp(positionId)}
     >
       <svg width="12" height="12" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -415,7 +415,7 @@ export default function Positions() {
         className="px-3 md:px-4 py-2 md:py-3 border-b border-[rgba(214,213,212,0.1)] flex items-center justify-between shrink-0"
       >
         <div className="flex items-center gap-2 md:gap-3">
-          <h3 className="text-[16px] md:text-[18px] font-400 text-white m-0">Positions</h3>
+          <h3 className="text-[18px] md:text-[18px] font-400 text-white m-0">Positions</h3>
           
           {/* WebSocket Status Indicator */}
           <div className="flex items-center gap-1.5 md:gap-2">
@@ -425,11 +425,11 @@ export default function Positions() {
                 ? 'bg-[#00FF24] shadow-[0_0_8px_#00FF24] animate-pulse' 
                 : 'bg-[#FF5E5E] shadow-[0_0_8px_#FF5E5E]'
             )} />
-            <span className="text-[10px] md:text-xs text-white/60 font-mono hidden sm:inline">
+            <span className="text-[12px] md:text-sm text-white/60 font-mono hidden sm:inline">
               {wsConnected ? 'Live' : reconnectAttempts > 0 ? `Reconnecting (${reconnectAttempts}/10)` : 'Connecting...'}
             </span>
             {wsError && (
-              <span className="text-[10px] md:text-xs text-[#FF5E5E]" title={wsError}>
+              <span className="text-[12px] md:text-sm text-[#FF5E5E]" title={wsError}>
                 ⚠️
               </span>
             )}
@@ -441,7 +441,7 @@ export default function Positions() {
           {!wsConnected && reconnectAttempts >= 10 && (
             <button
               onClick={wsReconnect}
-              className="px-2 md:px-3 py-1 md:py-1.5 bg-[#FF5E5E] border border-[#000000] text-[#000000] text-[11px] md:text-[14px] rounded-[24px] transition hover:bg-[#000000] hover:border-[#ffffff] hover:text-[#ffffff]"
+              className="px-2 md:px-3 py-1 md:py-1.5 bg-[#FF5E5E] border border-[#000000] text-[#000000] text-[12px] md:text-[16px] rounded-[24px] transition hover:bg-[#000000] hover:border-[#ffffff] hover:text-[#ffffff]"
             >
               <span className="hidden sm:inline">Reconnect Live</span>
               <span className="sm:hidden">Reconnect</span>

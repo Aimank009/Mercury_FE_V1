@@ -24,6 +24,7 @@ const Home: NextPage = () => {
   const [recenterTrigger, setRecenterTrigger] = useState(0);
   const [showSessionPrompt, setShowSessionPrompt] = useState(false);
   const [showTradingEnabledPopup, setShowTradingEnabledPopup] = useState(false);
+  const [hasInitialSwitched, setHasInitialSwitched] = useState(false);
   
   const {
     canAccessApp,
@@ -59,32 +60,36 @@ const Home: NextPage = () => {
     }
   }, [showTradingEnabledPopup]);
 
-  // Auto-switch to HyperEVM when wallet connects
+  // Auto-switch to HyperEVM ONLY on initial wallet connection
   useEffect(() => {
     const switchToHype = async () => {
       // HyperEVM Mainnet chain ID is 999 (0x3e7)
       const HYPE_CHAIN_ID = 999;
       
-      if (address && chain && chain.id !== HYPE_CHAIN_ID) {
+      // Only switch on initial connection, not on subsequent chain changes
+      if (address && chain && chain.id !== HYPE_CHAIN_ID && !hasInitialSwitched) {
         try {
-          console.log('🔄 Auto-switching to HyperEVM network...');
+          console.log('🔄 Initial auto-switching to HyperEVM network...');
           await switchChainAsync({ chainId: HYPE_CHAIN_ID });
           console.log('✅ Successfully switched to HyperEVM');
+          setHasInitialSwitched(true);
         } catch (error) {
           console.error('❌ Failed to switch network:', error);
-          // Show user-friendly error message
-          alert('⚠️ Please switch to HyperEVM network in your wallet to use this app.\n\nNetwork: HyperEVM\nChain ID: 999');
+          // Don't block the user, just mark as attempted
+          setHasInitialSwitched(true);
+          console.log('⚠️ User can manually switch to HyperEVM if needed');
         }
-      } else if (address && chain && chain.id === HYPE_CHAIN_ID) {
+      } else if (address && chain && chain.id === HYPE_CHAIN_ID && !hasInitialSwitched) {
         console.log('✅ Already on HyperEVM network');
+        setHasInitialSwitched(true);
       }
     };
     
-    // Only try to switch if wallet is connected
-    if (address) {
+    // Only try to switch if wallet is connected and we haven't done initial switch
+    if (address && !hasInitialSwitched) {
       switchToHype();
     }
-  }, [address, chain, switchChainAsync]);
+  }, [address, chain, switchChainAsync, hasInitialSwitched]);
 
   return (
     <div className={styles.container}>
@@ -128,7 +133,7 @@ const Home: NextPage = () => {
       />
       
       {/* Only show trading interface if user has completed onboarding OR is not connected */}
-      {(!isConnected || canAccessApp) && (
+      {(!isConnected || canAccessApp || showTermsModal || showUserCreationModal || showDepositModal) && (
         <>
           {/* Trading Section - exactly 100vh */}
           <div className={styles.tradingSection}>
@@ -290,7 +295,7 @@ const Home: NextPage = () => {
                 color: '#fff',
                 fontSize: 14,
                 fontWeight: 300,
-                fontFamily: 'Geist Mono',
+                fontFamily: 'Geist',
                 lineHeight: 1,
                 textTransform: 'lowercase',
                 transform: 'translateY(-0.5px)',
@@ -377,7 +382,7 @@ const Home: NextPage = () => {
                 color: '#fff',
                 fontSize: 14,
                 fontWeight: 300,
-                fontFamily: 'Geist Mono',
+                fontFamily: 'Geist',
                 lineHeight: 1,
                 transform: 'translateY(-0.5px)',
               }}
