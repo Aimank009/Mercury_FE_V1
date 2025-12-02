@@ -7,7 +7,7 @@
  * This value determines the height/range of each grid cell
  * Change this value in ONE place to update across the entire application
  */
-export const PRICE_STEP = 0.8;
+export const PRICE_STEP = 0.008;
 
 /**
  * Price decimals for display
