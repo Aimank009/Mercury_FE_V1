@@ -59,7 +59,7 @@ export const calculateCellBetInfo = (
   
   // Get bet amount from localStorage
   const savedAmount = typeof window !== 'undefined' ? localStorage.getItem('userAmount') : null;
-  const betAmount = savedAmount ? parseFloat(savedAmount) : 0.2;
+  const betAmount = savedAmount ? parseFloat(savedAmount) :1.0;
   const payout = betAmount * multiplier;
   
   // DON'T calculate nextUserMultiplier here - wait for bet confirmation
@@ -112,7 +112,7 @@ export const calculateRealNextUserMultiplier = async (
 
     // Get bet amount
     const savedAmount = typeof window !== 'undefined' ? localStorage.getItem('userAmount') : null;
-    const betAmount = savedAmount ? parseFloat(savedAmount) : 0.2;
+    const betAmount = savedAmount ? parseFloat(savedAmount) : 1.0;
 
     // Calculate what NEXT user will see (with current real shares)
     // Convert decimal shares (0.4) back to 1e6 format (400000) before BigInt conversion

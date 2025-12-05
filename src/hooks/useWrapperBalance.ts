@@ -112,7 +112,7 @@ export function useWrapperBalance(userAddress: string | undefined) {
     queryKey: ['wrapperBalance', userAddress?.toLowerCase()],
     queryFn: () => fetchWrapperBalance(userAddress!),
     enabled: !!userAddress,
-    staleTime: 30_000,
+    staleTime: Infinity,
     gcTime: 5 * 60 * 1000,
     retry: 1,
     retryDelay: 1000,

@@ -2,23 +2,27 @@
 
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount, useBalance, useDisconnect } from 'wagmi';
-import { useState, useEffect,useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/router';
+import Link from 'next/link';
 import { useSessionTrading } from '../contexts/SessionTradingContext';
 import { useWrapperBalance } from '../hooks/useWrapperBalance';
 import { useUserProfile } from '../hooks/useUserProfile';
+import { useModal } from '../contexts/ModalContext';
 
 interface NavbarProps {
-  onDepositClick?: () => void;
   onEnableTrading?: () => Promise<boolean>;
 }
 
-export default function Navbar({ onDepositClick, onEnableTrading }: NavbarProps) {
+export default function Navbar({ onEnableTrading }: NavbarProps) {
+  const { setShowDepositModal } = useModal();
   const { address, isConnected } = useAccount();
   const { disconnect } = useDisconnect();
   const { sdk } = useSessionTrading();
   const { data: balance } = useBalance({ address });
   const { balanceUSD: wrapperBalanceUSD, isLoading: isLoadingWrapper, error: balanceError } = useWrapperBalance(address);
   const { profile } = useUserProfile();
+  const router = useRouter();
 
   // Debug logging for balance
   useEffect(() => {
@@ -34,11 +38,18 @@ export default function Navbar({ onDepositClick, onEnableTrading }: NavbarProps)
   const [showAccountMenu, setShowAccountMenu] = useState(false);
   const [hasActiveSession, setHasActiveSession] = useState(false);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
-  const [activeNavItem, setActiveNavItem] = useState('Trade');
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const accountMenuRef = useRef<HTMLDivElement>(null);
   const mobileMenuRef = useRef<HTMLDivElement>(null);
 
+  // Set active nav item based on current route
+  const activeNavItem = router.pathname === '/portfolio' 
+    ? 'Portfolio' 
+    : router.pathname === '/leaderboard' 
+    ? 'Leaderboard' 
+    : router.pathname === '/referral'
+    ? 'Referral'
+    : 'Trade';
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -206,38 +217,42 @@ export default function Navbar({ onDepositClick, onEnableTrading }: NavbarProps)
           
           {/* Desktop Navigation - Hidden on mobile, visible on md+ */}
           <div className="hidden md:flex items-center gap-0">
-            <div 
+            <Link 
+              href="/"
+              prefetch={true}
               className={`px-[10px] lg:px-[12px] xl:px-[15px] py-[15px] text-[18px] font-[500] cursor-pointer transition-colors duration-300 hover:bg-white/10 whitespace-nowrap ${
                 activeNavItem === 'Trade' ? 'border-b-2 border-[#00ff24] text-white' : 'border-b-2 border-transparent text-gray-500'
               }`}
-              onClick={() => setActiveNavItem('Trade')}
             >
               Trade
-            </div>
-            <div 
+            </Link>
+            <Link 
+              href="/leaderboard"
+              prefetch={true}
               className={`px-[10px] lg:px-[12px] xl:px-[15px] py-[15px] text-[18px] font-[500] cursor-pointer transition-colors duration-300 hover:bg-white/10 whitespace-nowrap ${
                 activeNavItem === 'Leaderboard' ? 'border-b-2 border-[#00ff24] text-white' : 'border-b-2 border-transparent text-gray-500'
               }`}
-              onClick={() => setActiveNavItem('Leaderboard')}
             >
               Leaderboard
-            </div>
-            <div 
+            </Link>
+            <Link 
+              href="/referral"
+              prefetch={true}
               className={`px-[10px] lg:px-[12px] xl:px-[15px] py-[15px] text-[18px] font-[500] cursor-pointer transition-colors duration-300 hover:bg-white/10 whitespace-nowrap ${
-                activeNavItem === 'Refferal' ? 'border-b-2 border-[#00ff24] text-white' : 'border-b-2 border-transparent text-gray-500'
+                activeNavItem === 'Referral' ? 'border-b-2 border-[#00ff24] text-white' : 'border-b-2 border-transparent text-gray-500'
               }`}
-              onClick={() => setActiveNavItem('Refferal')}
             >
-              Refferal
-            </div>
-            <div 
+              Referral
+            </Link>
+            <Link 
+              href="/portfolio"
+              prefetch={true}
               className={`px-[10px] lg:px-[12px] xl:px-[15px] py-[15px] text-[18px] font-[500] cursor-pointer transition-colors duration-300 hover:bg-white/10 whitespace-nowrap ${
                 activeNavItem === 'Portfolio' ? 'border-b-2 border-[#00ff24] text-white' : 'border-b-2 border-transparent text-gray-500'
               }`}
-              onClick={() => setActiveNavItem('Portfolio')}
             >
               Portfolio
-            </div>
+            </Link>
           </div>
         </div>
 
@@ -262,7 +277,7 @@ export default function Navbar({ onDepositClick, onEnableTrading }: NavbarProps)
 
           {isConnected && address ? (
             <div className="flex items-center gap-2 md:gap-2.5 lg:gap-3 xl:gap-4">
-              {!hasActiveSession && (
+              {!hasActiveSession && router.isReady && router.pathname !== '/portfolio' && (
                <button
                className="hidden md:flex items-center justify-center px-4 lg:px-5 xl:px-6 bg-[#00FF24] h-[40px] rounded-full text-black border-[0.5px] border-transparent font-[Geist Mono] text-[16px] font-500 whitespace-nowrap transition-all duration-300 hover:bg-black hover:text-white hover:border-white disabled:opacity-60 disabled:cursor-not-allowed"
                onClick={handleEnableTrading}
@@ -276,7 +291,7 @@ export default function Navbar({ onDepositClick, onEnableTrading }: NavbarProps)
               )}
 
                 <div 
-                  onClick={onDepositClick}
+                  onClick={() => setShowDepositModal(true)}
                   className="hidden md:flex items-center bg-transparent border border-[rgba(238,237,236,0.4)] rounded-full h-[40px] px-3 lg:px-3.5 xl:px-4 gap-2.5 cursor-pointer transition-all duration-200 hover:opacity-90"
                 >
                 <span className="font-[Geist Mono] text-[15px] font-500 text-white whitespace-nowrap">
@@ -391,50 +406,46 @@ export default function Navbar({ onDepositClick, onEnableTrading }: NavbarProps)
           >
             <div className="flex flex-col p-4 gap-2 pb-6 w-full overflow-x-hidden">
               {/* Mobile Navigation */}
-              <div 
+              <Link 
+                href="/"
+                prefetch={true}
                 className={`px-4 py-3 text-[18px] font-[500] cursor-pointer transition-colors duration-300 hover:bg-white/10 rounded-lg ${
                   activeNavItem === 'Trade' ? 'bg-[#00ff24]/10 text-[#00ff24]' : 'text-gray-400'
                 }`}
-                onClick={() => {
-                  setActiveNavItem('Trade');
-                  setShowMobileMenu(false);
-                }}
+                onClick={() => setShowMobileMenu(false)}
               >
                 Trade
-              </div>
-              <div 
+              </Link>
+              <Link 
+                href="/leaderboard"
+                prefetch={true}
                 className={`px-4 py-3 text-[18px] font-[500] cursor-pointer transition-colors duration-300 hover:bg-white/10 rounded-lg ${
                   activeNavItem === 'Leaderboard' ? 'bg-[#00ff24]/10 text-[#00ff24]' : 'text-gray-400'
                 }`}
-                onClick={() => {
-                  setActiveNavItem('Leaderboard');
-                  setShowMobileMenu(false);
-                }}
+                onClick={() => setShowMobileMenu(false)}
               >
                 Leaderboard
-              </div>
-              <div 
+              </Link>
+              <Link 
+                href="/referral"
+                prefetch={true}
                 className={`px-4 py-3 text-[16px] font-[500] cursor-pointer transition-colors duration-300 hover:bg-white/10 rounded-lg ${
-                  activeNavItem === 'Refferal' ? 'bg-[#00ff24]/10 text-[#00ff24]' : 'text-gray-400'
+                  activeNavItem === 'Referral' ? 'bg-[#00ff24]/10 text-[#00ff24]' : 'text-gray-400'
                 }`}
-                onClick={() => {
-                  setActiveNavItem('Refferal');
-                  setShowMobileMenu(false);
-                }}
+                onClick={() => setShowMobileMenu(false)}
               >
-                Refferal
-              </div>
-              <div 
+                Referral
+              </Link>
+              <Link 
+                href="/portfolio"
+                prefetch={true}
                 className={`px-4 py-3 text-[18px] font-[500] cursor-pointer transition-colors duration-300 hover:bg-white/10 rounded-lg ${
                   activeNavItem === 'Portfolio' ? 'bg-[#00ff24]/10 text-[#00ff24]' : 'text-gray-400'
                 }`}
-                onClick={() => {
-                  setActiveNavItem('Portfolio');
-                  setShowMobileMenu(false);
-                }}
+                onClick={() => setShowMobileMenu(false)}
               >
                 Portfolio
-              </div>
+              </Link>
 
               {/* Mobile Account Section */}
               {isConnected && address && (
@@ -444,7 +455,7 @@ export default function Navbar({ onDepositClick, onEnableTrading }: NavbarProps)
                   {/* Balance & Deposit */}
                   <div 
                     onClick={() => {
-                      onDepositClick?.();
+                      setShowDepositModal(true);
                       setShowMobileMenu(false);
                     }}
                     className="flex items-center justify-between bg-white/5 rounded-lg p-3 cursor-pointer transition-all duration-200 hover:opacity-90"
@@ -460,7 +471,7 @@ export default function Navbar({ onDepositClick, onEnableTrading }: NavbarProps)
                   </div>
 
                   {/* Enable Trading */}
-                  {!hasActiveSession && (
+                  {!hasActiveSession && router.isReady && router.pathname !== '/portfolio' && (
                     <button
                       className="w-full px-4 py-3 bg-[#00FF24] rounded-lg text-black font-[Geist Mono] text-[16px] font-500 transition-all duration-300 hover:bg-black hover:text-white"
                       onClick={() => {

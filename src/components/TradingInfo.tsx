@@ -5,6 +5,7 @@ import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { usePriceFeed } from '../contexts/PriceFeedContext';
 import { useGlobalLiquidity } from '../hooks/useGlobalLiquidity';
+import { useTVL } from '../hooks/useTVL';
 import { STORAGE_KEYS } from '../config';
 
 interface TradingInfoProps {
@@ -16,8 +17,9 @@ interface TradingInfoProps {
 export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSet }: TradingInfoProps) {
   const { currentPrice, isConnected } = usePriceFeed();
   const { liquidityPool, isLoading } = useGlobalLiquidity();
-  const [amount, setAmount] = useState<number>(0.2);
-  const [inputValue, setInputValue] = useState<string>('0.2');
+  const { data: tvl, isLoading: tvlLoading } = useTVL();
+  const [amount, setAmount] = useState<number>(1.0);
+  const [inputValue, setInputValue] = useState<string>('1.0');
   const [showTradingPairDropdown, setShowTradingPairDropdown] = useState(false);
   const [showAmountModal, setShowAmountModal] = useState(false);
   const [error, setError] = useState<string>('');
@@ -49,7 +51,7 @@ export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSe
     const savedAmount = localStorage.getItem(STORAGE_KEYS.USER_AMOUNT);
     if (savedAmount) {
       const parsedAmount = parseFloat(savedAmount);
-      if (parsedAmount >= 0.2) {
+      if (parsedAmount >= 0.1) {
         setAmount(parsedAmount);
         setInputValue(savedAmount);
       }
@@ -90,8 +92,8 @@ export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSe
       setError('Please enter a valid number');
       return;
     }
-    if (numValue < 0.2) {
-      setError('Amount must be at least $0.2');
+    if (numValue < 0.1) {
+      setError('Amount must be at least $1');
       return;
     }
     setAmount(numValue);
@@ -112,7 +114,7 @@ export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSe
     setShowAmountModal(false);
   };
 
-  const quickAmounts = [0.2, 0.5, 1, 2, 5, 10];
+  const quickAmounts = [0.2, 0.5, 0.5, 1.5 , 2 ,5 ];
 
   // Format the liquidity value with proper decimals and commas
   const formatLiquidity = (value: string) => {
@@ -200,7 +202,9 @@ export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSe
         </div>
         <div className="flex flex-col gap-1 px-1 sm:px-2">
           <div className="text-[10px] sm:text-[11px] md:text-[12px] text-white/40 font-normal font-['Geist',sans-serif]">TVL</div>
-          <div className="font-['Geist',sans-serif] flex justify-center text-[14px] sm:text-[16px] md:text-[18px] font-medium text-[#eeedec]">$40,456.67</div>
+          <div className="font-['Geist',sans-serif] flex justify-center text-[14px] sm:text-[16px] md:text-[18px] font-medium text-[#eeedec]">
+            ${tvlLoading ? '...' : tvl ? tvl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+          </div>
         </div>
       </div>
      
@@ -263,7 +267,7 @@ export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSe
                         setInputValue(amount.toString());
                       }
                     }}
-                    placeholder="0.2"
+                    placeholder="1"
                   />
                   <div className="flex gap-3">
                     {quickAmounts.slice(0, 3).map((amt) => (

@@ -2,6 +2,8 @@ import '../styles/globals.css';
 import '@rainbow-me/rainbowkit/styles.css';
 import type { AppProps } from 'next/app';
 import { useEffect } from 'react';
+import { GeistSans } from 'geist/font/sans';
+import { GeistMono } from 'geist/font/mono';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WagmiProvider } from 'wagmi';
@@ -9,6 +11,10 @@ import { RainbowKitProvider } from '@rainbow-me/rainbowkit';
 import { PriceFeedProvider } from '../contexts/PriceFeedContext';
 import { SessionTradingProvider } from '../contexts/SessionTradingContext';
 import { DepositWithdrawProvider } from '../contexts/DepositWithdrawContext';
+import { ModalProvider } from '../contexts/ModalContext';
+import Navbar from '../components/Navbar';
+import DepositWithdrawModal from '../components/DepositWithdrawModal';
+import PageLoader from '../components/PageLoader';
 // import { SupabaseDiagnostics } from '../components/SupabaseDiagnostics';
 
 import { config } from '../wagmi';
@@ -146,15 +152,20 @@ function MyApp({ Component, pageProps }: AppProps) {
   }, []);
 
   return (
-    <div>
+    <div className={`${GeistSans.variable} ${GeistMono.variable} font-sans`}>
       <WagmiProvider config={config}>
         <QueryClientProvider client={client}>
           <RainbowKitProvider>
             <PriceFeedProvider>
               <SessionTradingProvider>
                 <DepositWithdrawProvider>
-                  <Component {...pageProps} />
-                  {/* <SupabaseDiagnostics /> - Disabled, Supabase is working */}
+                  <ModalProvider>
+                    <PageLoader />
+                    <Navbar />
+                    <DepositWithdrawModal />
+                    <Component {...pageProps} />
+                    {/* <SupabaseDiagnostics /> - Disabled, Supabase is working */}
+                  </ModalProvider>
                 </DepositWithdrawProvider>
               </SessionTradingProvider>
             </PriceFeedProvider>

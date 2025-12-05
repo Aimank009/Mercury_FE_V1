@@ -3,14 +3,16 @@ import { supabase } from '../lib/supabaseClient';
 import { generateAvatarImage } from '../lib/avatarGenerator';
 import { useDisconnect } from 'wagmi';
 import { triggerProfileRefresh } from '../hooks/useUserProfile';
+import { assignReferralCode } from '../utils/generateReferralCode';
 
 interface UserCreationModalProps {
   isOpen: boolean;
   onSuccess: () => void;
   walletAddress: string;
+  usedReferralCode: string | null;
 }
 
-export default function UserCreationModal({ isOpen, onSuccess, walletAddress }: UserCreationModalProps) {
+export default function UserCreationModal({ isOpen, onSuccess, walletAddress, usedReferralCode }: UserCreationModalProps) {
   const [username, setUsername] = useState('');
   const [avatarUrl, setAvatarUrl] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -29,12 +31,14 @@ export default function UserCreationModal({ isOpen, onSuccess, walletAddress }: 
       }
 
       try {
-        console.log('🔍 UserCreationModal: Checking for existing user:', walletAddress);
+        // Normalize wallet address to lowercase for consistent comparison
+        const normalizedAddress = walletAddress.toLowerCase();
+        console.log('🔍 UserCreationModal: Checking for existing user:', walletAddress, '(normalized:', normalizedAddress, ')');
         
         const { data: existingUser, error: fetchError } = await supabase
           .from('users')
           .select('wallet_address, username')
-          .ilike('wallet_address', walletAddress) // Case-insensitive!
+          .ilike('wallet_address', normalizedAddress) // Case-insensitive!
           .maybeSingle();
 
         if (fetchError) {
@@ -105,6 +109,10 @@ export default function UserCreationModal({ isOpen, onSuccess, walletAddress }: 
     setIsLoading(true);
     setError('');
 
+    // Get used referral code from props or localStorage
+    const referralCodeToUse = usedReferralCode || localStorage.getItem(`mercury_used_referral_${walletAddress.toLowerCase()}`) || null;
+    console.log('🔑 Referral code to use:', { usedReferralCode, fromLocalStorage: localStorage.getItem(`mercury_used_referral_${walletAddress.toLowerCase()}`), final: referralCodeToUse });
+
     try {
       // Check if username is taken
       const { data: existingUser } = await supabase
@@ -119,28 +127,55 @@ export default function UserCreationModal({ isOpen, onSuccess, walletAddress }: 
         return;
       }
 
+      // Generate referral code BEFORE creating user
+      let newUserReferralCode = '';
+      try {
+        const { generateReferralCode } = await import('../utils/generateReferralCode');
+        newUserReferralCode = await generateReferralCode(username);
+        console.log('🎟️ Generated referral code:', newUserReferralCode);
+      } catch (refError) {
+        console.error('⚠️ Failed to generate referral code:', refError);
+        // Continue with empty referral code
+      }
+
       // Using the RPC function we defined in SQL
+      // Keep wallet address as-is (checksum format from wagmi)
+      if (!newUserReferralCode) {
+        console.warn('No referral code generated, proceeding without it');
+      }
       const { error: rpcError } = await supabase
         .rpc('create_user_profile', { 
           p_wallet_address: walletAddress,
           p_username: username,
-          p_avatar_url: avatarUrl
+          p_avatar_url: avatarUrl,
+          p_used_referral: referralCodeToUse, // Store the access code as used_referral
+          p_user_referral: newUserReferralCode || null
         });
-
-      if (rpcError) {
-        // If RPC fails (maybe function not created yet or signature mismatch), try direct insert
-        console.warn('RPC failed, trying direct insert:', rpcError);
-        const { error: insertError } = await supabase
+        console.log("create user profile usr");
+        
+        
+        if (rpcError) {
+          // If RPC fails (maybe function not created yet or signature mismatch), try direct insert
+          console.warn('RPC failed, trying direct insert:', rpcError);
+          const { error: insertError } = await supabase
           .from('users')
           .insert([
             { 
               wallet_address: walletAddress, 
               username: username,
-              avatar_url: avatarUrl
+              avatar_url: avatarUrl,
+              used_referral: referralCodeToUse, // Store the access code as used_referral
+              user_referral: newUserReferralCode || null,
+              num_referral: 0,
+              xp: 0
             }
           ]);
+          console.log("create user profile usr cbsjdhcbdshjb");
           
         if (insertError) throw insertError;
+        console.log('✅ User created with referral code:', newUserReferralCode);
+      } else {
+        console.log('✅ User created via RPC with referral code:', newUserReferralCode);
       }
 
       // Trigger profile refresh so Navbar updates immediately
@@ -253,7 +288,7 @@ export default function UserCreationModal({ isOpen, onSuccess, walletAddress }: 
                   setUsername(val);
                   if (error) setError('');
                 }}
-                placeholder="username"
+                placeholder="Username"
                 className={`w-full bg-[#1a1a1a] border rounded-lg pl-9 pr-4 py-3 text-left placeholder:text-[#444] focus:outline-none transition-colors font-mono text-sm ${
                   error 
                     ? 'text-[#FF3B30] border-[#FF3B30] focus:border-[#FF3B30]' 
@@ -290,7 +325,7 @@ export default function UserCreationModal({ isOpen, onSuccess, walletAddress }: 
           <button
             onClick={handleSubmit}
             disabled={isLoading || !username || !agreedToTerms}
-            className="w-[359px] -ml-6 bg-[#00FF24]/80 hover:bg-[#00cc1f] disabled:opacity-50 disabled:cursor-not-allowed text-black font-500 py-3 rounded-[8px] transition-all duration-200 font-geist text-[16px] tracking-wide mt-6"
+            className="w-[359px]  bg-[#00FF24]/80 hover:bg-[#00cc1f] disabled:opacity-50 disabled:cursor-not-allowed text-black font-500 py-3 rounded-[8px] transition-all duration-200 font-geist text-[16px] tracking-wide absolute bottom-4 left-1/2 -translate-x-1/2"
             style={{
                 boxShadow: '0px 0px 20px rgba(0, 255, 36, 0.2)'
             }}

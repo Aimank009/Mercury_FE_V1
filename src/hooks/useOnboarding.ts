@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAccount } from 'wagmi';
 import { useSessionTrading } from '../contexts/SessionTradingContext';
-import { supabase } from '../lib/supabaseClient';
-import { triggerProfileRefresh } from './useUserProfile';
+import { useUserProfile } from './useUserProfile';
 
 interface OnboardingState {
   hasAcceptedTerms: boolean;
@@ -10,17 +9,21 @@ interface OnboardingState {
   showTermsModal: boolean;
   showUserCreationModal: boolean;
   isLoadingProfile: boolean;
+  usedReferralCode: string | null;
 }
 
 export function useOnboarding() {
   const { address, isConnected } = useAccount();
   const { sdk } = useSessionTrading();
+  const { profile, isLoading: isProfileLoading } = useUserProfile();
+  
   const [state, setState] = useState<OnboardingState>({
     hasAcceptedTerms: false,
     hasCreatedProfile: false,
     showTermsModal: false,
     showUserCreationModal: false,
-    isLoadingProfile: false,
+    isLoadingProfile: true,
+    usedReferralCode: null,
   });
   const [sessionStatus, setSessionStatus] = useState<{
     message: string;
@@ -36,86 +39,91 @@ export function useOnboarding() {
         showTermsModal: false,
         showUserCreationModal: false,
         isLoadingProfile: false,
+        usedReferralCode: null,
       });
       return;
     }
 
     const checkOnboardingStatus = async () => {
-      setState(prev => ({ ...prev, isLoadingProfile: true }));
+      console.log('🔄 Checking onboarding status:', { isProfileLoading, hasProfile: !!profile, address });
+      
+      // OPTIMIZATION: If we have a profile (even from cache), use it immediately
+      // Don't wait for loading state - this makes the UI instant for returning users
+      if (profile) {
+        // ✅ USER EXISTS - They are fully onboarded!
+        console.log('✅ Existing user found:', profile.username);
+        
+        const accessKey = `mercury_access_granted_${address.toLowerCase()}`;
+        // Ensure access key is set
+        localStorage.setItem(accessKey, 'true');
+        
+        setState(prev => ({
+          ...prev,
+          hasAcceptedTerms: true,
+          hasCreatedProfile: true,
+          showTermsModal: false,
+          showUserCreationModal: false,
+          isLoadingProfile: false,
+        }));
+        return;
+      }
+      
+      // Only show loading if we don't have cached data and are still loading
+      if (isProfileLoading) {
+        console.log('⏳ Profile still loading, waiting...');
+        setState(prev => ({ ...prev, isLoadingProfile: true }));
+        return;
+      }
       
       const accessKey = `mercury_access_granted_${address.toLowerCase()}`;
       
-      // 1. FIRST check if user already exists in database (case-insensitive)
-      try {
-        console.log('🔍 Checking if user exists in database:', address);
-        
-        const { data: existingUser, error: userError } = await supabase
-          .from('users')
-          .select('wallet_address, username')
-          .ilike('wallet_address', address) // Case-insensitive match!
-          .maybeSingle(); // Use maybeSingle to avoid error when no rows
-        
-        if (existingUser && !userError) {
-          // ✅ USER EXISTS IN DATABASE - They are fully onboarded!
-          console.log('✅ Existing user found:', existingUser.username);
-          
-          // Also set localStorage so future checks are faster
-          localStorage.setItem(accessKey, 'true');
-          
-          // Trigger profile refresh so Navbar loads immediately
-          triggerProfileRefresh();
-          
-          setState({
-            hasAcceptedTerms: true,
-            hasCreatedProfile: true,
-            showTermsModal: false,
-            showUserCreationModal: false,
-            isLoadingProfile: false,
-          });
-          return;
-        }
-        
-        console.log('👋 User not found in database, checking access code...');
-        
-      } catch (err) {
-        console.error('Error checking user in database:', err);
-        // Continue to check access code
-      }
+      console.log('👋 User not found in profile cache, checking access code...');
 
       // 2. Check Access Code (Local Storage) - only for new users
       const hasAccess = localStorage.getItem(accessKey) === 'true';
+      
+      // Also check for stored referral code
+      const storedReferralCode = localStorage.getItem(`mercury_used_referral_${address.toLowerCase()}`);
 
       if (!hasAccess) {
-        // New user without access code - show terms modal
-        setState({
+        // New user without access code - show terms modal (AccessCodeModal)
+        console.log('🔑 No access code found, showing AccessCodeModal');
+        setState(prev => ({
+          ...prev,
           hasAcceptedTerms: false,
           hasCreatedProfile: false,
           showTermsModal: true,
           showUserCreationModal: false,
           isLoadingProfile: false,
-        });
+        }));
         return;
       }
 
       // 3. Has access code but no profile -> Show Creation Modal
-      setState({
+      console.log('📝 Has access code but no profile, showing UserCreationModal');
+      setState(prev => ({
+        ...prev,
         hasAcceptedTerms: true,
         hasCreatedProfile: false,
         showTermsModal: false,
         showUserCreationModal: true,
         isLoadingProfile: false,
-      });
+        usedReferralCode: storedReferralCode,
+      }));
     };
 
     checkOnboardingStatus();
-  }, [address, isConnected]);
+  }, [address, isConnected, profile, isProfileLoading]);
 
-  const handleAcceptTerms = async () => {
+  const handleAcceptTerms = async (accessCode: string) => {
     if (!address) return;
 
     // Store access grant in localStorage
     const storageKey = `mercury_access_granted_${address.toLowerCase()}`;
     localStorage.setItem(storageKey, 'true');
+    
+    // Also store the used referral code for the UserCreationModal
+    localStorage.setItem(`mercury_used_referral_${address.toLowerCase()}`, accessCode);
 
     // Move to User Creation
     setState(prev => ({
@@ -123,6 +131,7 @@ export function useOnboarding() {
       hasAcceptedTerms: true,
       showTermsModal: false,
       showUserCreationModal: true,
+      usedReferralCode: accessCode,
     }));
   };
 
@@ -166,10 +175,11 @@ export function useOnboarding() {
   };
 
   return {
-    canAccessApp: state.hasAcceptedTerms && state.hasCreatedProfile,
+    canAccessApp: (!!profile) || (state.hasAcceptedTerms && state.hasCreatedProfile),
     showTermsModal: state.showTermsModal,
     showUserCreationModal: state.showUserCreationModal,
     isLoadingProfile: state.isLoadingProfile,
+    usedReferralCode: state.usedReferralCode,
     handleAcceptTerms,
     handleProfileCreated,
     handleCloseModal,

@@ -3,6 +3,7 @@ import { ethers } from 'ethers';
 import { useSessionTrading } from '../contexts/SessionTradingContext';
 import { PRICE_STEP, CONTRACTS, DEFAULT_CHAIN_ID, API_URLS, STORAGE_KEYS } from '../config';
 import { storage, formatNumber, formatUSD } from '../utils';
+import { supabase } from '../lib/supabaseClient';
 
 // ========================================
 // CONFIGURATION
@@ -428,7 +429,7 @@ export function useOrderPlacement() {
         amountUSD = parseFloat(savedAmount);
         console.log('💰 Using amount from AmountModal:', amountUSD);
       } else {
-        amountUSD = 0.2; // Default to 0.2 USD
+        amountUSD = 1.0; // Default to 1.0 USD
         console.log('💰 No amount set, using default:', amountUSD);
       }
       
@@ -926,11 +927,123 @@ export function useOrderPlacement() {
       console.log('');
 
       // ========================================
-      // STEP 6: Return Result
+      // STEP 6: Update Trading Volume
       // ========================================
       if (result.status === 'ok') {
         console.log('🎉 BET PLACED SUCCESSFULLY!');
         console.log('   Transaction Hash:', result.tx_hash);
+        
+        // Update trading volume in users table
+        try {
+          console.log('💰 Updating trading volume...');
+          const userAddress = orderData.user.toLowerCase();
+          console.log('  - User address (lowercase):', userAddress);
+          console.log('  - Bet amount (USD):', amountUSD);
+          
+          // First, try to get current volume using case-insensitive search
+          const { data: existingUsers, error: fetchError } = await supabase
+            .from('users')
+            .select('trading_volume, wallet_address')
+            .ilike('wallet_address', userAddress); // Case-insensitive match
+          
+          if (fetchError) {
+            console.error('❌ Error fetching user:', fetchError);
+          }
+          
+          // Find exact match (case-insensitive)
+          const existingUser = existingUsers?.find(u => 
+            u.wallet_address.toLowerCase() === userAddress
+          );
+          
+          const currentVolume = existingUser?.trading_volume || 0;
+          const newVolume = currentVolume + amountUSD;
+          
+          console.log('  - Current volume:', currentVolume);
+          console.log('  - New volume:', newVolume);
+          console.log('  - User exists?', !!existingUser);
+          
+          // Use RPC call or direct update with case-insensitive matching
+          // First try to update existing user
+          if (existingUser) {
+            const { data: updateData, error: updateError, count } = await supabase
+              .from('users')
+              .update({
+                trading_volume: newVolume
+              })
+              .eq('wallet_address', existingUser.wallet_address)
+              .select(); // Select to verify update
+            
+            if (updateError) {
+              console.error('❌ Error updating trading volume:', updateError);
+              console.error('  - Error details:', JSON.stringify(updateError, null, 2));
+              console.error('  - Error code:', updateError.code);
+              console.error('  - Error message:', updateError.message);
+            } else {
+              // Verify the update actually happened
+              if (updateData && updateData.length > 0) {
+                const updatedVolume = updateData[0].trading_volume;
+                console.log(`✅ Trading volume updated: $${currentVolume.toFixed(2)} → $${newVolume.toFixed(2)} (+$${amountUSD.toFixed(2)})`);
+                console.log('  - Verified in response:', updatedVolume);
+                
+                // Double-check by fetching again
+                const { data: verifyData, error: verifyError } = await supabase
+                  .from('users')
+                  .select('trading_volume')
+                  .eq('wallet_address', existingUser.wallet_address)
+                  .single();
+                
+                if (verifyData) {
+                  console.log('  - Verified in DB:', verifyData.trading_volume);
+                  if (Math.abs(verifyData.trading_volume - newVolume) > 0.01) {
+                    console.warn('⚠️ WARNING: Volume mismatch! Update may have been blocked by RLS.');
+                  }
+                }
+              } else {
+                console.warn('⚠️ Update returned no data - may have been blocked by RLS');
+              }
+            }
+          } else {
+            // User doesn't exist, create new one
+            console.log('  - Creating new user record...');
+            const { data: insertData, error: insertError } = await supabase
+              .from('users')
+              .insert({
+                wallet_address: userAddress,
+                trading_volume: newVolume,
+                xp: 0,
+                referral: 0
+              });
+            
+            if (insertError) {
+              console.error('❌ Error creating user:', insertError);
+              console.error('  - Error details:', JSON.stringify(insertError, null, 2));
+              
+              // If insert fails due to conflict, try update again
+              if (insertError.code === '23505') { // Unique violation
+                console.log('  - User already exists, trying update...');
+                const { error: retryError } = await supabase
+                  .from('users')
+                  .update({
+                    trading_volume: newVolume
+                  })
+                  .eq('wallet_address', userAddress);
+                
+                if (retryError) {
+                  console.error('❌ Retry update also failed:', retryError);
+                } else {
+                  console.log(`✅ Trading volume updated (retry): $${newVolume.toFixed(2)}`);
+                }
+              }
+            } else {
+              console.log(`✅ New user created with trading volume: $${newVolume.toFixed(2)}`);
+            }
+          }
+        } catch (volError: any) {
+          console.error('❌ Error updating trading volume:', volError);
+          console.error('  - Error message:', volError?.message);
+          console.error('  - Error stack:', volError?.stack);
+          // Don't fail the bet placement if volume update fails
+        }
         
         // NOTE: Nonce is now incremented optimistically in getCurrentNonce()
         // No need to increment again here

@@ -13,7 +13,7 @@
   }
 
   body {
-    font-family: 'Geist', sans-serif;
+    font-family: var(--font-geist-sans), sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     background-color: #000000;
@@ -32,12 +32,12 @@
 
   /* Special classes for mono font when needed */
   .font-mono, .font-geist-mono {
-    font-family: 'Geist Mono', monospace;
+    font-family: var(--font-geist-mono), monospace;
   }
 
   /* Code elements should use mono font */
   code, pre, .code {
-    font-family: 'Geist Mono', monospace;
+    font-family: var(--font-geist-mono), monospace;
   }
 }
 

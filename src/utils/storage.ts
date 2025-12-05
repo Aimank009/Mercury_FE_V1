@@ -180,7 +180,7 @@ export const cache = {
  */
 export const userAmount = {
   get(): string {
-    return storage.get<string>(STORAGE_KEYS.USER_AMOUNT) || '0.1';
+    return storage.get<string>(STORAGE_KEYS.USER_AMOUNT) || '1.0';
   },
 
   set(amount: string): boolean {

@@ -7,7 +7,7 @@
  * This value determines the height/range of each grid cell
  * Change this value in ONE place to update across the entire application
  */
-export const PRICE_STEP = 0.008;
+export const PRICE_STEP = 0.01;
 
 /**
  * Price decimals for display
@@ -42,7 +42,7 @@ export const CHART_CONFIG = {
 export const BET_CONFIG = {
   MIN_AMOUNT: '0.0001',
   MAX_AMOUNT: '1000',
-  DEFAULT_AMOUNT: '0.1',
+  DEFAULT_AMOUNT: '1.0',
   AMOUNT_DECIMALS: 6,
 } as const;
 

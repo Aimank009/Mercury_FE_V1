@@ -35,7 +35,7 @@ export function useAllUsersBetsQuery({
     queryKey,
     queryFn: () => fetchAllUsersBets(currentTime, priceMin, priceMax, timeWindowSeconds),
     enabled,
-    staleTime: 0, // Always consider data stale to allow refetch
+    staleTime: 10000, // Consider data fresh for 10 seconds to prevent instant refetch on page switch
     gcTime: 5 * 60 * 1000, // Keep in cache for 5 minutes
     refetchOnWindowFocus: false,
     refetchOnMount: true,

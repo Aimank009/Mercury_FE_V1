@@ -262,15 +262,14 @@ async function fetchBetsBatch({
       const { count: totalBets } = await supabase
         .from(TABLES.BET_PLACED_WITH_SESSION)
         .select('*', { count: 'exact', head: true });
-      console.log(`📊 Total bets in database: ${totalBets || 0}`);
+      
       
       // Check what addresses are actually in the database
       const { data: sampleAddresses } = await supabase
         .from(TABLES.BET_PLACED_WITH_SESSION)
         .select('user_address')
         .limit(10);
-      console.log('📝 Sample addresses in DB:', sampleAddresses?.map(b => b.user_address));
-      console.log('📝 Looking for address:', normalizedAddress);
+     
       
       // Fallback: Fetch all recent bets and filter client-side by address
       console.log('🔍 Trying client-side filtering fallback...');
@@ -290,10 +289,10 @@ async function fetchBetsBatch({
         bet.user_address.toLowerCase() === normalizedAddress
       ) || [];
       
-      console.log(`✅ Client-side filter found ${matchingBets.length} matching bets`);
+      console.log(`Client-side filter found ${matchingBets.length} matching bets`);
       
       if (matchingBets.length > 0) {
-        console.log('📊 First matching bet:', matchingBets[0]);
+        console.log('First matching bet:', matchingBets[0]);
         const formattedPositions = await formatPositions(matchingBets);
         return { data: formattedPositions, nextCursor: null };
       }
@@ -301,7 +300,7 @@ async function fetchBetsBatch({
       return { data: [], nextCursor: null };
     }
 
-    console.log(`✅ Fetched ${data.length} bets (total: ${count || 'unknown'})`);
+    console.log(`Fetched ${data.length} bets (total: ${count || 'unknown'})`);
 
     const formattedPositions = await formatPositions(data);
     
@@ -309,18 +308,18 @@ async function fetchBetsBatch({
     const hasMore = data.length === BATCH_SIZE;
     const nextCursor = hasMore ? pageParam + 1 : null;
 
-    console.log(`✅ Formatted ${formattedPositions.length} positions, hasMore: ${hasMore}`);
+    console.log(`Formatted ${formattedPositions.length} positions, hasMore: ${hasMore}`);
     
     // Log settlement statuses for debugging
     const statusBreakdown = formattedPositions.reduce((acc, p) => {
       acc[p.settlement.status] = (acc[p.settlement.status] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
-    console.log('📊 Status breakdown:', statusBreakdown);
+    console.log('Status breakdown:', statusBreakdown);
 
     return { data: formattedPositions, nextCursor };
   } catch (error: any) {
-    console.error('❌ Fatal error in fetchBetsBatch:', error);
+    console.error('Fatal error in fetchBetsBatch:', error);
     throw error;
   }
 }
@@ -329,7 +328,8 @@ export function useUserBets() {
   const { address } = useAccount();
   const queryClient = useQueryClient();
   const wsClient = useRef(getMercuryWebSocketClient()).current;
-  const fallbackTimerRef = useRef<NodeJS.Timeout>();
+    const fallbackTimerRef = useRef<number | null>(null);
+
 
   const queryKey = useMemo(() => 
     ['userBets', address?.toLowerCase() || 'none'],
@@ -348,7 +348,7 @@ export function useUserBets() {
   } = useInfiniteQuery({
     queryKey,
     queryFn: ({ pageParam }) => {
-      console.log('🔍 Query function called with:', { pageParam, address });
+      
       return fetchBetsBatch({ pageParam, userAddress: address });
     },
     initialPageParam: 0,
@@ -369,7 +369,7 @@ export function useUserBets() {
   // Debug logging
   useEffect(() => {
     if (address) {
-      console.log('📊 useUserBets state:', {
+      console.log('useUserBets state:', {
         address,
         isLoading,
         isFetching,
@@ -512,6 +512,14 @@ export function useUserBets() {
         if (cacheAge < CACHE_EXPIRY.POSITIONS) {
           const parsed = typeof cachedPositions === 'string' ? JSON.parse(cachedPositions) : cachedPositions;
           console.log('⚡ Restored', parsed.length, 'cached positions - INSTANT LOAD!');
+          
+          queryClient.setQueryData<InfiniteData<{ data: Position[]; nextCursor: number | null }>>(
+            queryKey,
+            {
+              pages: [{ data: parsed, nextCursor: parsed.length === BATCH_SIZE ? 1 : null }],
+              pageParams: [0],
+            }
+          );
         }
       }
     } catch (error) {
@@ -530,10 +538,14 @@ export function useUserBets() {
     // Layer 1: Optimistic updates (instant)
     const handleOrderPlaced = (event: Event) => {
       const detail = (event as CustomEvent).detail;
-      console.log('📢 orderPlaced event - adding optimistic bet');
+       if (detail.error) {
+        console.log('orderPlaced event with error - skipping optimistic update:', detail.error);
+        return;
+      }
+      
+      console.log('orderPlaced event - adding optimistic bet');
       addOptimisticBet(detail);
     };
-
     // Layer 2: Mercury WebSocket (primary, <100ms)
     const setupWebSocket = async () => {
       try {
@@ -613,7 +625,7 @@ export function useUserBets() {
     };
 
     // Fallback timer: If WebSocket doesn't connect in 5s, use Supabase
-    fallbackTimerRef.current = setTimeout(() => {
+    fallbackTimerRef.current = window.setTimeout(() => {
       if (!wsConnected) {
         console.log('⏱️ WebSocket timeout, activating fallback');
         activateFallback();
@@ -628,13 +640,12 @@ export function useUserBets() {
         schema: 'public',
         table: 'timeperiod_settled',
       }, (payload) => {
-        const settlement = payload.new || payload.record;
+        const settlement = payload.new as { timeperiod_id: number; twap_price: string | null };
         if (!settlement) return;
         
         const timeperiodId = settlement.timeperiod_id;
         const twapPrice = settlement.twap_price;
         
-        console.log('⚡ INSTANT settlement update:', timeperiodId);
         
         // INSTANT optimistic cache update - show settlement price immediately
         queryClient.setQueryData(
@@ -693,7 +704,7 @@ export function useUserBets() {
         window.removeEventListener('orderPlaced', handleOrderPlaced);
       }
       if (fallbackTimerRef.current) {
-        clearTimeout(fallbackTimerRef.current);
+        window.clearTimeout(fallbackTimerRef.current);
       }
       if (fallbackChannel) {
         supabase?.removeChannel(fallbackChannel);

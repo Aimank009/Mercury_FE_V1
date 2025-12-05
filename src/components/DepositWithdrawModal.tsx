@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAccount, useWalletClient, useSwitchChain } from 'wagmi';
 import { useDepositWithdraw } from '../contexts/DepositWithdrawContext';
+import { useModal } from '../contexts/ModalContext';
 import { LiFiSDK, SUPPORTED_CHAINS, ChainOption } from '../lib/LiFiSDK';
 import { getChainBalance } from '../lib/chainBalances';
 import { ethers } from 'ethers';
@@ -20,11 +21,6 @@ const USDTO_ADDRESS = '0xB8CE59FC3717ada4C02eaDF9682A9e934F625ebb';
 const WRAPPER_ABI = [
   'function depositForUser(uint256 _amount, address _user) external'
 ];
-
-interface DepositWithdrawModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-}
 
 // Define available tokens per chain with Trustwallet logos
 const CHAIN_TOKENS: Record<number, Array<{ symbol: string; address: string; decimals: number; logo?: string }>> = {
@@ -234,7 +230,8 @@ const CHAIN_TOKENS: Record<number, Array<{ symbol: string; address: string; deci
   ],
 };
 
-export default function DepositWithdrawModal({ isOpen, onClose }: DepositWithdrawModalProps) {
+export default function DepositWithdrawModal() {
+  const { showDepositModal, setShowDepositModal } = useModal();
   const [activeTab, setActiveTab] = useState<'deposit' | 'withdraw'>('deposit');
   const [amount, setAmount] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -367,7 +364,7 @@ export default function DepositWithdrawModal({ isOpen, onClose }: DepositWithdra
   // Connect SDK when modal opens and on HyperEVM, refresh balance for withdraw
   useEffect(() => {
     const initializeForWithdraw = async () => {
-      if (!isOpen || !address) return;
+      if (!showDepositModal || !address) return;
       
       if (activeTab === 'withdraw') {
         console.log('Initializing for withdraw tab, currentChain:', currentChain?.id);
@@ -401,15 +398,15 @@ export default function DepositWithdrawModal({ isOpen, onClose }: DepositWithdra
     };
     
     initializeForWithdraw();
-  }, [isOpen, address, activeTab]);
+  }, [showDepositModal, address, activeTab]);
 
   // Also refresh balance when SDK becomes connected
   useEffect(() => {
-    if (isConnected && activeTab === 'withdraw' && isOpen) {
+    if (isConnected && activeTab === 'withdraw' && showDepositModal) {
       console.log('SDK connected, refreshing balance...');
       refreshBalance();
     }
-  }, [isConnected, activeTab, isOpen]);
+  }, [isConnected, activeTab, showDepositModal]);
 
   useEffect(() => {
     if (successMessage) {
@@ -439,7 +436,7 @@ export default function DepositWithdrawModal({ isOpen, onClose }: DepositWithdra
     }
   }, [showChainDropdown, showTokenDropdown]);
 
-  if (!isOpen) return null;
+  if (!showDepositModal) return null;
 
   const handleBridgeDeposit = async () => {
     if (!walletClient || !address) {
@@ -508,7 +505,7 @@ export default function DepositWithdrawModal({ isOpen, onClose }: DepositWithdra
       setSuccessMessage(`✅ Successfully deposited ${amount} USDTO!`);
       setAmount('');
       setCurrentStep('idle');
-      setTimeout(() => onClose(), 2000);
+      setTimeout(() => setShowDepositModal(false), 2000);
     } catch (err: any) {
       console.error('Deposit error:', err);
       setCurrentStep('idle');
@@ -535,7 +532,7 @@ export default function DepositWithdrawModal({ isOpen, onClose }: DepositWithdra
       const result = await withdraw(amount);
       setSuccessMessage(`✅ Successfully withdrew ${amount} USDTO!`);
       setAmount('');
-      setTimeout(() => onClose(), 2000);
+      setTimeout(() => setShowDepositModal(false), 2000);
     } catch (err: any) {
       console.error('Withdraw error:', err);
     } finally {
@@ -627,12 +624,12 @@ export default function DepositWithdrawModal({ isOpen, onClose }: DepositWithdra
   return (
     <div
       className="fixed inset-0 bg-black/30 backdrop-blur-[12px] flex items-center justify-center z-[10002] animate-fade-in"
-      onClick={onClose}
+      onClick={() => setShowDepositModal(false)}
     >
       <div className="relative overflow-visible">
         {/* Close Button */}
         <button
-          onClick={onClose}
+          onClick={() => setShowDepositModal(false)}
           className="absolute -top-4 -right-4 w-8 h-8 rounded-full bg-[#000E02] hover:bg-[#2a2a2a] border border-[#162A19] flex items-center justify-center transition-all duration-200 group z-[10003]"
         >
           <svg className="w-5 h-5 text-gray-400 group-hover:text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">

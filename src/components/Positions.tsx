@@ -38,10 +38,10 @@ const ActionButtons = memo(({
   onShare: (id: string) => void; 
   onHelp: (id: string) => void; 
 }) => (
-  <div className="flex items-center gap-2 md:gap-4">
+  <div className="flex items-center -mr-20 gap-2">
     {isResolved && (
       <button
-        className="flex items-center gap-1 text-[9px] md:text-[11px] border rounded-[24px] bg-[#1A1A1A] text-[#767676] background-blur-sm px-2 md:px-3 py-1 md:py-2 transition hover:text-[#00ff24]"
+        className="flex items-center gap-1 text-[9px] md:text-[11px] border-2 border-[#333] rounded-[24px] bg-[#1A1A1A] text-[#767676] px-2 md:px-3 py-1 md:py-2 transition hover:text-[#00ff24] hover:border-[#00ff24]"
         onClick={() => onShare(positionId)}
       >
         <svg width="11" height="11" viewBox="0 0 11 11" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -51,21 +51,14 @@ const ActionButtons = memo(({
       </button>
     )}
     <button
-      className="flex items-center gap-1 text-[9px] md:text-[11px] border rounded-[24px] bg-[#1A1A1A] text-[#767676] background-blur-sm px-2 md:px-3 py-1 md:py-2 transition hover:text-[#00ff24]"
+      className="flex items-center gap-1 text-[9px] md:text-[11px] border-2 border-[#333] rounded-[24px] bg-[#1A1A1A] text-[#767676] px-2 md:px-3 py-1 md:py-2 transition hover:text-[#00ff24] hover:border-[#00ff24]"
       onClick={() => onHelp(positionId)}
     >
-      <svg width="12" height="12" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <g clipPath="url(#clip0_600_35176)">
-          <path fill="currentColor" d="M7.26177 4.67163V2.79663C7.26177 1.87454 5.77344 1.81746 5.77344 2.79663" stroke="#767676" strokeWidth="0.8" strokeLinecap="round" strokeLinejoin="round"/>
-          <path fill="currentColor" d="M5.77363 4.16671V1.96337C5.77363 1.04129 4.2853 0.984207 4.2853 1.96337V2.71337M4.28488 4.48421V2.79671C4.28488 1.87462 2.72363 1.81754 2.72363 2.79671V5.41671" stroke="#767676" strokeWidth="0.8" strokeLinecap="round" strokeLinejoin="round"/>
-          <path fill="currentColor" d="M7.26165 3.88012C7.26165 2.90095 8.74998 2.95804 8.74998 3.88012V5.71345C8.74998 8.5647 4.66707 9.70429 2.80082 7.83595L1.46123 6.48595C0.840817 5.79345 1.68498 4.37512 2.72373 5.41679L3.1404 5.83345" stroke="#767676" strokeWidth="0.8" strokeLinecap="round" strokeLinejoin="round"/>
-        </g>
-        <defs>
-          <clipPath id="clip0_600_35176">
-            <rect width="10" height="10" fill="currentColor"/>
-          </clipPath>
-        </defs>
-      </svg>
+       <svg width="12" height="12" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M7.26177 4.67163V2.79663C7.26177 1.87454 5.77344 1.81746 5.77344 2.79663" stroke="currentColor" strokeWidth="0.8" strokeLinecap="round" strokeLinejoin="round"/>
+                                    <path d="M5.77363 4.16671V1.96337C5.77363 1.04129 4.2853 0.984207 4.2853 1.96337V2.71337M4.28488 4.48421V2.79671C4.28488 1.87462 2.72363 1.81754 2.72363 2.79671V5.41671" stroke="currentColor" strokeWidth="0.8" strokeLinecap="round" strokeLinejoin="round"/>
+                                    <path d="M7.26165 3.88012C7.26165 2.90095 8.74998 2.95804 8.74998 3.88012V5.71345C8.74998 8.5647 4.66707 9.70429 2.80082 7.83595L1.46123 6.48595C0.840817 5.79345 1.68498 4.37512 2.72373 5.41679L3.1404 5.83345" stroke="currentColor" strokeWidth="0.8" strokeLinecap="round" strokeLinejoin="round"/>
+                                  </svg>
       Help
     </button>
   </div>
@@ -120,16 +113,7 @@ export default function Positions() {
   // Enhanced debug logging with WebSocket status
   useEffect(() => {
     if (process.env.NODE_ENV === 'development') {
-      console.log('📊 Positions state:', {
-        positionsCount: positions.length,
-        isLoading,
-        error,
-        address,
-        currentPage,
-        wsConnected,
-        wsError,
-        reconnectAttempts,
-      });
+      
     }
   }, [positions.length, isLoading, error, address, currentPage, wsConnected, wsError, reconnectAttempts]);
   
@@ -142,12 +126,12 @@ export default function Positions() {
 
   // Memoized callbacks
   const handleShare = useCallback((id: string) => {
-    console.log('Share position:', id);
+    
     // Implement share logic
   }, []);
 
   const handleHelp = useCallback((id: string) => {
-    console.log('Help for position:', id);
+    
     // Implement help logic
   }, []);
 
@@ -156,15 +140,15 @@ export default function Positions() {
     
     try {
       setIsRefreshing(true);
-      console.log('🔄 Manual refresh initiated...');
+      
       
       setCurrentPage(1);
       queryClient.removeQueries({ queryKey: ['userBets', address.toLowerCase()] });
       await refetch();
       
-      console.log('✅ Refresh completed');
+      
     } catch (error) {
-      console.error('❌ Error refreshing:', error);
+     
     } finally {
       setIsRefreshing(false);
     }
@@ -184,7 +168,7 @@ export default function Positions() {
   useEffect(() => {
     if (!address) return;
 
-    console.log('🔔 Setting up Supabase real-time subscription for Positions...');
+   console.log('Setting up Supabase realtime subscription for:', address);
 
     const channel = supabase
       .channel('positions-new-bets')
@@ -199,7 +183,7 @@ export default function Positions() {
           // Check if this bet is from the current user
           const newBet = payload.new as Record<string, unknown>;
           if ((newBet.user_address as string)?.toLowerCase() === address.toLowerCase()) {
-            console.log('📥 New bet detected for current user:', newBet);
+            console.log('New bet detected for current user:', newBet);
             // Refetch to get the latest data with proper formatting
             refetch();
           }
@@ -216,18 +200,25 @@ export default function Positions() {
           // Check if this bet is from the current user
           const updatedBet = payload.new as Record<string, unknown>;
           if ((updatedBet.user_address as string)?.toLowerCase() === address.toLowerCase()) {
-            console.log('📝 Bet updated for current user:', updatedBet);
+            console.log('Bet updated for current user:', updatedBet);
             // Refetch to get the latest data
             refetch();
           }
         }
       )
       .subscribe((status) => {
-        console.log('📡 Positions Supabase subscription status:', status);
+        console.log('Supabase channel subscription status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('Successfully subscribed to bet updates');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('Supabase channel error - realtime may not work');
+        } else if (status === 'TIMED_OUT') {
+          console.error('Supabase subscription timed out');
+        }
       });
 
     return () => {
-      console.log('🔕 Cleaning up Positions Supabase subscription...');
+     
       supabase.removeChannel(channel);
     };
   }, [address, refetch]);
@@ -496,7 +487,7 @@ export default function Positions() {
         </div>
       ) : (
         <>
-          <div className="w-full overflow-x-auto flex-1 min-h-0 relative scrollbar-thin -mx-3 md:mx-0">
+          <div className="w-full overflow-x-hidden flex-1 min-h-0 relative scrollbar-thin -mx-3 md:mx-0">
             <table className="w-full border-collapse text-sm min-w-[600px] md:min-w-0">
               <thead ref={tableHeaderRef} className="bg-[#141414] sticky top-0 z-10">
                 <tr>

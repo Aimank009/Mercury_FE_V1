@@ -67,8 +67,9 @@ export const updateBetSettlement = async (
     .update({ 
       status, 
       settled_at: new Date().toISOString(),
-      settlement_price: Math.floor(settlementPriceMiddle * 1e8), // Store middle of range for backward compatibility
-      multiplier // Keep multiplier if win, 0 if loss
+      settlement_price: Math.floor(settlementPriceMiddle * 1e8),
+      multiplier,
+      adjusted_multiplier: multiplier
     })
     .eq('event_id', eventId);
     

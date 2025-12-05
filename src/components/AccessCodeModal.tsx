@@ -4,7 +4,7 @@ import { useDisconnect } from 'wagmi';
 
 interface AccessCodeModalProps {
   isOpen: boolean;
-  onSuccess: () => void;
+  onSuccess: (accessCode: string) => void;
 }
 
 export default function AccessCodeModal({ isOpen, onSuccess }: AccessCodeModalProps) {
@@ -24,14 +24,18 @@ export default function AccessCodeModal({ isOpen, onSuccess }: AccessCodeModalPr
     setError('');
 
     try {
-      // Call the Postgres function we created
+      // Check if this code exists as someone's user_referral (referral code)
       const { data, error } = await supabase
-        .rpc('check_access_code', { input_code: code });
+        .from('users')
+        .select('wallet_address')
+        .eq('user_referral', code.trim())
+        .maybeSingle();
 
       if (error) throw error;
 
-      if (data === true) {
-        onSuccess();
+      if (data) {
+        // Valid referral code found - pass it to onSuccess
+        onSuccess(code.trim());
       } else {
         setError('Invalid access code');
       }

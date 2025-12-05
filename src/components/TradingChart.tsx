@@ -10,7 +10,8 @@ import {
   calculateShares,
   getMultiplierValue,
   toUSDCFormat,
-  toShareFormat
+  toShareFormat,
+  getRealtimeMultiplier
 } from '../lib/contractMultiplier';
 import { useSoundEffects } from '../hooks/useSoundEffects';
 import { useAllUsersBetsQuery } from '../hooks/useAllUsersBetsQuery';
@@ -71,27 +72,20 @@ export default function TradingChart({
       
       // Skip if we already processed this timeperiod
       if (processedSettlementsRef.current.has(settlementTimeperiodId)) {
-        console.log(`⏭️ Skipping duplicate settlement for timeperiod ${settlementTimeperiodId}`);
         return;
       }
       
-      // Mark this timeperiod as processed
       processedSettlementsRef.current.add(settlementTimeperiodId);
       
       const settlementTimeperiodIdNum = parseInt(settlementTimeperiodId);
       
-      // Extract price range from settlement message (new format: price_min and price_max)
       const settlementPriceMin = parseFloat(settlementsMessage.price_min || settlementsMessage.price) / 1e8;
       const settlementPriceMax = parseFloat(settlementsMessage.price_max || settlementsMessage.price) / 1e8;
       
-      console.log(`\n🏆 Settlement received: timeperiod ${settlementTimeperiodIdNum}, price range $${settlementPriceMin.toFixed(priceDecimals)} - $${settlementPriceMax.toFixed(priceDecimals)}`);
-      
-      // FIRST: Check local selectedCellsRef for matching bets (INSTANT - no DB query needed)
       let foundLocalBets = false;
       const localUpdates: Array<{cellKey: string; status: string; bet: any}> = [];
       
       selectedCellsRef.current.forEach((cell, cellKey) => {
-        // Calculate timeperiod for this cell
         const cellTimeperiodId = Math.floor((cell.t + 0.0001) / GRID_SEC) * GRID_SEC;
         
         if (cellTimeperiodId === settlementTimeperiodIdNum && (cell.status === 'confirmed' || cell.status === 'pending')) {
@@ -100,19 +94,15 @@ export default function TradingChart({
           const priceMin = cell.priceMin;
           const priceMax = cell.priceMax;
           
-          // Check if settlement price range OVERLAPS with bet's price range
           const isWin = settlementPriceMin < priceMax && settlementPriceMax > priceMin;
           const newStatus = isWin ? 'won' : 'lost';
           
-          console.log(`  📊 Local bet found: ${cellKey} - ${newStatus.toUpperCase()}`);
-          console.log(`     Bet range: $${priceMin?.toFixed(3)} - $${priceMax?.toFixed(3)}`);
-          console.log(`     Settlement range: $${settlementPriceMin.toFixed(3)} - $${settlementPriceMax.toFixed(3)}`);
+       
           
-          // Update cell status IMMEDIATELY
           cell.status = newStatus;
           cell.timestamp = Date.now();
           
-          // Update multiplier: keep if win, set to 0 if loss
+          
           if (!isWin) {
             cell.multiplier = 0;
             cell.payout = 0;
@@ -122,7 +112,7 @@ export default function TradingChart({
           if (isWin) {
             soundsRef.current.playWin();
           } else {
-            soundsRef.current.playLoss();
+            // soundsRef.current.playLoss();
           }
           
           localUpdates.push({ cellKey, status: newStatus, bet: cell });
@@ -131,32 +121,88 @@ export default function TradingChart({
       
       // Force re-render IMMEDIATELY if we found local bets
       if (foundLocalBets) {
-        console.log(`  ✅ Updated ${localUpdates.length} local bets instantly`);
         forceUpdate();
         
         // Update database in BACKGROUND (don't wait)
         localUpdates.forEach(({ cellKey, status, bet }) => {
-          if (bet.orderId) {
-            const settlementPriceMiddle = (settlementPriceMin + settlementPriceMax) / 1e8;
-            const finalMultiplier = status === 'won' ? (bet.multiplier || 0) : 0;
-            
-            supabase
-              .from('bet_placed_with_session')
-              .update({ 
-                status: status, 
-                settled_at: new Date().toISOString(),
-                settlement_price: Math.floor((settlementPriceMin + settlementPriceMax) / 2 * 1e8),
-                multiplier: finalMultiplier
-              })
-              .eq('event_id', bet.orderId)
-              .then(({ error }) => {
-                if (error) {
-                  console.error(`❌ Error updating bet ${bet.orderId}:`, error);
-                } else {
-                  console.log(`✅ Database updated for bet ${bet.orderId}`);
-                }
-              });
+          if (!address) {
+            console.warn('⚠️ Cannot update bet: user address not available');
+            return;
           }
+          
+          const settlementPriceMiddle = (settlementPriceMin + settlementPriceMax) / 1e8;
+          const finalMultiplier = status === 'won' ? (bet.multiplier || 0) : 0;
+          const timeperiodIdStr = settlementTimeperiodIdNum.toString();
+          const priceMinRaw = Math.floor(bet.priceMin * 1e8);
+          const priceMaxRaw = Math.floor(bet.priceMax * 1e8);
+          
+          
+          
+          supabase
+            .from('bet_placed_with_session')
+            .select('event_id, shares_received, timeperiod_id')
+            .eq('timeperiod_id', timeperiodIdStr)
+            .eq('price_min', priceMinRaw.toString())
+            .eq('price_max', priceMaxRaw.toString())
+            .eq('user_address', address)
+            .eq('status', 'pending')
+            .limit(1)
+            .single()
+            .then(({ data: betData, error: findError }) => {
+              if (findError || !betData) {
+                console.warn(`⚠️ Could not find bet in database:`, findError);
+                console.warn('  - Search criteria:', {
+                  timeperiod_id: timeperiodIdStr,
+                  price_min: priceMinRaw,
+                  price_max: priceMaxRaw,
+                  user_address: address
+                });
+                return;
+              }
+              
+              const eventId = betData.event_id;
+              supabase
+                .from('bet_placed')
+                .select('total_share')
+                .eq('timeperiod_id', timeperiodIdStr)
+                .eq('price_min', priceMinRaw.toString())
+                .eq('price_max', priceMaxRaw.toString())
+                .maybeSingle()
+                .then(({ data: gridData }) => {
+                  const totalShareStr = gridData?.total_share || betData.shares_received || '0';
+                  const timeperiodIdNum = parseInt(betData.timeperiod_id);
+                  
+                  // Calculate real multiplier using getRealtimeMultiplier
+                  const realtimeMultiplier = getRealtimeMultiplier(totalShareStr, timeperiodIdNum);
+                  const adjustedMultiplier = status === 'won' ? realtimeMultiplier.multiplier : 0;
+                  
+                  // Now update using the correct event_id
+                  const updatePayload = {
+                    status: status, 
+                    settled_at: new Date().toISOString(),
+                    settlement_price: Math.floor((settlementPriceMin + settlementPriceMax) / 2 * 1e8),
+                    multiplier: finalMultiplier,
+                    adjusted_multiplier: adjustedMultiplier
+                  };
+                  
+                  supabase
+                    .from('bet_placed_with_session')
+                    .update(updatePayload)
+                    .eq('event_id', eventId)
+                    .select()
+                    .then(({ data, error }) => {
+                      if (error) {
+                        console.error(`❌ Error updating bet ${eventId}:`, error);
+                        console.error('  - Error code:', error.code);
+                        console.error('  - Error message:', error.message);
+                      } else if (data && data.length > 0) {
+                       
+                      } else {
+                        console.warn(`⚠️ Update returned no data for bet ${eventId}`);
+                      }
+                    });
+                });
+            });
         });
         
         // Trigger positions table refresh
@@ -174,7 +220,7 @@ export default function TradingChart({
         const { data: userBets, error } = await supabase
           .from('bet_placed_with_session')
           .select('*')
-          .ilike('user_address', address)
+          .eq('user_address', address)
           .eq('timeperiod_id', settlementTimeperiodId)
           .in('status', ['pending', 'confirmed']);
         
@@ -184,13 +230,11 @@ export default function TradingChart({
         }
         
         if (!userBets || userBets.length === 0) {
-          console.log(`  ⏭️  No unsettled bets found for this timeperiod`);
+         
           return;
         }
         
-        console.log(`  📊 Found ${userBets.length} bets in database (fallback path)`);
-        
-        // Process each bet from database
+       
         const updatePromises = userBets.map(async (bet) => {
           const priceMin = parseFloat(bet.price_min) / 1e8;
           const priceMax = parseFloat(bet.price_max) / 1e8;
@@ -205,23 +249,38 @@ export default function TradingChart({
           const calculatedMultiplier = bet.multiplier || 0;
           const finalMultiplier = isWin ? calculatedMultiplier : 0;
           
-          console.log(`  📊 Bet ${bet.event_id.substring(0, 10)}... - ${newStatus.toUpperCase()}`);
           
-          // Update database
           const settlementPriceMiddle = (settlementPriceMin + settlementPriceMax) / 2;
-          const { error: updateError } = await supabase
+          const updatePayload = {
+            status: newStatus, 
+            settled_at: new Date().toISOString(),
+            settlement_price: Math.floor(settlementPriceMiddle * 1e8),
+            multiplier: finalMultiplier,
+            adjusted_multiplier: finalMultiplier
+          };
+          
+          
+          const { data: updateData, error: updateError } = await supabase
             .from('bet_placed_with_session')
-            .update({ 
-              status: newStatus, 
-              settled_at: new Date().toISOString(),
-              settlement_price: Math.floor(settlementPriceMiddle * 1e8),
-              multiplier: finalMultiplier
-            })
-            .eq('event_id', bet.event_id);
+            .update(updatePayload)
+            .eq('event_id', bet.event_id)
+            .select();
           
           if (updateError) {
             console.error('❌ Error updating bet status:', updateError);
+            console.error('  - Error code:', updateError.code);
+            console.error('  - Error message:', updateError.message);
+            console.error('  - Full error:', JSON.stringify(updateError, null, 2));
+            console.error('  - Event ID being searched:', bet.event_id);
             return null;
+          }
+          
+          if (updateData && updateData.length > 0) {
+            // Successfully updated
+          } else {
+            console.warn(`⚠️ Update returned no data for bet ${bet.event_id}`);
+            console.warn('  - This might mean the event_id does not exist in the database');
+            console.warn('  - Event ID being searched:', bet.event_id);
           }
           
           // Add to UI
@@ -412,6 +471,9 @@ export default function TradingChart({
   const hasStartedPlottingRef = useRef<boolean>(false);
   const isInDragSelectionModeRef = useRef<boolean>(false); // Track if double-click activated drag mode
   
+  // Web Worker for continuous background plotting
+  const priceWorkerRef = useRef<Worker | null>(null);
+  
   // All users' bets: Store bets from all users for real-time visualization
   const allUsersBetsRef = useRef<Map<string, UserBet[]>>(new Map()); // key: grid_id, value: array of bets
   
@@ -490,7 +552,7 @@ export default function TradingChart({
     Object.keys(localStorage).forEach(key => {
       if (key.startsWith('nonce_')) {
         localStorage.removeItem(key);
-        console.log(`Cleared: ${key}`);
+       
       }
     });
   };
@@ -504,7 +566,7 @@ export default function TradingChart({
     
     localStorage.removeItem(sessionKey);
     localStorage.removeItem(sessionKeyLower);
-    console.log(`✅ Deleted session for ${address}`);
+    
   };
 
   // WebSocket real-time bets
@@ -559,346 +621,155 @@ export default function TradingChart({
     enabled: true // Enabled for real-time updates
   });
 
-  // Real-time activity feed: Track settlements (wins)
+  // Real-time activity feed: Use ONLY Supabase Realtime for accurate win/loss updates
+  // Listen to UPDATE events on bet_placed_with_session when status changes to 'won' or 'lost'
   useEffect(() => {
-    if (!settlementsMessage || !address) return;
-    
-    const settlementTimeperiodId = settlementsMessage.timeperiod_id;
-    
-    // Extract price range from settlement message (new format: price_min and price_max)
-    const settlementPriceMin = parseFloat(settlementsMessage.price_min || settlementsMessage.price) / 1e8;
-    const settlementPriceMax = parseFloat(settlementsMessage.price_max || settlementsMessage.price) / 1e8;
-    
-    // Query all bets for this timeperiod to show wins in activity feed
-    const updateActivityFeedFromSettlement = async () => {
-      // Skip if already processed for feed
-      if (processedFeedSettlementsRef.current.has(settlementTimeperiodId)) return;
+    if (!address) return;
 
-      const settlementTimeperiodIdNum = parseInt(settlementTimeperiodId);
-      
-      console.log(`🔍 Checking feed for settlement ${settlementTimeperiodIdNum}. Realtime bets count: ${realtimeBets?.length || 0}`);
+    console.log('📡 Setting up Supabase realtime for activity feed (bet_placed_with_session)');
 
-      // 1. Try local realtimeBets first (INSTANT)
-      let sourceBets: any[] = realtimeBets.filter(bet => {
-        const betTimeperiodId = typeof bet.timeperiod_id === 'string' ? parseInt(bet.timeperiod_id) : bet.timeperiod_id;
-        return betTimeperiodId === settlementTimeperiodIdNum;
-      });
-      
-      let usedFallback = false;
+    const activityChannel = supabase
+      .channel('activity_feed_bets')
+      // Listen for UPDATE events when status changes to won/lost
+      .on('postgres_changes' as any, {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'bet_placed_with_session',
+      }, async (payload: any) => {
+        const bet = payload.new;
+        const oldBet = payload.old;
+        if (!bet) return;
 
-      // 2. If no local bets found, fallback to Supabase query (RELIABLE)
-      if (!sourceBets || sourceBets.length === 0) {
-        console.log(`⚠️ No local bets found for settlement ${settlementTimeperiodIdNum}, fetching from DB...`);
-        try {
-          const { data: dbBets } = await supabase
-            .from('bet_placed_with_session')
-            .select('user_address, amount, multiplier, price_min, price_max, timeperiod_id')
-            .eq('timeperiod_id', settlementTimeperiodId);
-            
-          if (dbBets && dbBets.length > 0) {
-            console.log(`✅ Fetched ${dbBets.length} bets from DB`);
-            sourceBets = dbBets;
-            usedFallback = true;
-          } else {
-             console.log(`❌ No bets found in DB either for ${settlementTimeperiodIdNum}`);
-             // Don't return here, just let it fall through to empty check
-          }
-        } catch (err) {
-          console.error("Error fetching bets fallback:", err);
-        }
-      }
-
-      if (!sourceBets || sourceBets.length === 0) {
-        return;
-      }
-
-      console.log(`✅ Processing ${sourceBets.length} bets for feed (Fallback: ${usedFallback})`);
-
-      // Mark as processed
-      processedFeedSettlementsRef.current.add(settlementTimeperiodId);
-      
-      // Process ALL bets (not just current user's)
-      const allBets = sourceBets;
-      
-      if (allBets.length === 0) {
-        console.log(`ℹ️ No bets found in this settlement`);
-        return;
-      }
-      
-      console.log(`👥 Found ${allBets.length} bets from ALL users in this settlement`);
+        // Only process when status changes to 'won' or 'lost'
+        const newStatus = bet.status;
+        const oldStatus = oldBet?.status;
         
-      const newActivities: typeof activityFeed = [];
-      
-      // Fetch usernames for all bet addresses
-      const userAddresses = Array.from(new Set(allBets.map(bet => bet.user_address)));
-      const usernameMap = new Map<string, string>();
-      
-      try {
-        const { data: profiles } = await supabase
-          .from('users')
-          .select('wallet_address, username');
-        
-        console.log('📋 All users from DB:', profiles);
-        console.log('🔍 Looking for addresses:', userAddresses);
-        
-        if (profiles) {
-          profiles.forEach(profile => {
-            // Store by lowercase address for matching
-            usernameMap.set(profile.wallet_address.toLowerCase(), profile.username);
-          });
-        }
-        
-        console.log('✅ Username map:', Array.from(usernameMap.entries()));
-      } catch (err) {
-        console.error('Error fetching usernames:', err);
-      }
-      
-      allBets.forEach(bet => {
-        let betPriceMin: number;
-        let betPriceMax: number;
-        let amount: number;
-        let dbMultiplier: number;
+        // Skip if status didn't change or isn't won/lost
+        if (newStatus === oldStatus) return;
+        if (newStatus !== 'won' && newStatus !== 'lost') return;
 
-        if (usedFallback) {
-          // Handle DB format (strings, scaled by 1e8 for price, 1e6 for amount)
-          betPriceMin = parseFloat(bet.price_min) / 1e8;
-          betPriceMax = parseFloat(bet.price_max) / 1e8;
-          amount = parseFloat(bet.amount) / 1e6; // Convert from USDC precision to dollars
-          dbMultiplier = bet.multiplier ? parseFloat(bet.multiplier.toString()) : 0;
-        } else {
-          // Handle UserBet format from realtimeBets (already in dollars for amount)
-          // Calculate price range from price_level
-          betPriceMin = bet.price_level - priceStep / 2;
-          betPriceMax = bet.price_level + priceStep / 2;
-          // UserBet.amount is already in dollars (converted in useAllUsersBetsQuery)
-          amount = typeof bet.amount === 'string' ? parseFloat(bet.amount) : bet.amount;
-          dbMultiplier = bet.multiplier ? parseFloat(bet.multiplier.toString()) : 0;
-        }
-        
-        // Check for overlap - if price ranges overlap, it's a WIN
-        const isWin = settlementPriceMin < betPriceMax && settlementPriceMax > betPriceMin;
-        const isYou = address && bet.user_address.toLowerCase() === address.toLowerCase();
-        const username = usernameMap.get(bet.user_address.toLowerCase()) || bet.user_address.slice(0, 6);
-
-        // Store these for positions table lookup
-        bet.isWin = isWin;
-        bet.isYou = isYou;
-        bet.username = username;
-        bet.betPriceMin = betPriceMin;
-        bet.betPriceMax = betPriceMax;
-        bet.amount = amount;
-        bet.dbMultiplier = dbMultiplier;
-      });
-
-      // NOW fetch positions table data for ALL users to get accurate multipliers and payouts
-      const positionsMap = new Map<string, { multiplier: number; payout: number }>();
-      try {
-        const { data: positions } = await supabase
-          .from('user_positions')
-          .select('user_address, timeperiod_id, multiplier, payout_amount, price_min, price_max')
-          .eq('timeperiod_id', settlementTimeperiodId);
-        
-        if (positions) {
-          console.log(`📊 Fetched ${positions.length} positions from DB for settlement ${settlementTimeperiodId}`);
-          positions.forEach(pos => {
-            // Create a key that matches the bet (user + timeperiod + price range)
-            const priceMin = parseFloat(pos.price_min) / 1e8;
-            const priceMax = parseFloat(pos.price_max) / 1e8;
-            const key = `${pos.user_address.toLowerCase()}_${pos.timeperiod_id}_${priceMin.toFixed(2)}_${priceMax.toFixed(2)}`;
-            positionsMap.set(key, {
-              multiplier: parseFloat(pos.multiplier),
-              payout: parseFloat(pos.payout_amount) / 1e6 // Convert from USDC precision
-            });
-          });
-          console.log(`✅ Loaded ${positionsMap.size} positions into map`);
-        }
-      } catch (err) {
-        console.error('Error fetching positions:', err);
-      }
-
-      // Process each bet and create activities
-      allBets.forEach(bet => {
-        const { isWin, isYou, username, betPriceMin, betPriceMax, amount, dbMultiplier } = bet;
-        
-        // Try to get actual data from positions table
-        const posKey = `${bet.user_address.toLowerCase()}_${settlementTimeperiodId}_${betPriceMin.toFixed(2)}_${betPriceMax.toFixed(2)}`;
-        const positionData = positionsMap.get(posKey);
-        
-        let multiplier = dbMultiplier;
-        let payout = amount;
-        
-        if (isWin && positionData) {
-          // Use data from positions table (most accurate)
-          multiplier = positionData.multiplier;
-          payout = positionData.payout;
-          console.log(`✅ Using positions table data for ${isYou ? 'YOU' : '@' + username}: multiplier=${multiplier.toFixed(2)}X, payout=$${payout.toFixed(2)}`);
-        } else if (isWin && isYou) {
-          // Fallback for current user: try selectedCellsRef
-          for (const [cellKey, cell] of Array.from(selectedCellsRef.current.entries())) {
-            const cellTimeperiodId = Math.floor((cell.t + 0.0001) / GRID_SEC) * GRID_SEC;
-            if (cellTimeperiodId === settlementTimeperiodIdNum && cell.multiplier) {
-              multiplier = cell.multiplier;
-              payout = amount * multiplier;
-              console.log(`✅ Using selectedCellsRef for YOU: multiplier=${multiplier.toFixed(2)}X, payout=$${payout.toFixed(2)}`);
-              break;
-            }
-          }
-        } else if (isWin) {
-          // Last resort: calculate from dbMultiplier
-          multiplier = dbMultiplier > 0 ? dbMultiplier : 1.5;
-          payout = amount * multiplier;
-          console.log(`⚠️ Using DB multiplier for ${isYou ? 'YOU' : '@' + username}: multiplier=${multiplier.toFixed(2)}X, payout=$${payout.toFixed(2)}`);
-        }
-        
-        console.log(`📊 Checking bet: price range [${betPriceMin.toFixed(3)}-${betPriceMax.toFixed(3)}] vs settlement [${settlementPriceMin.toFixed(3)}-${settlementPriceMax.toFixed(3)}], amount: $${amount.toFixed(2)}, multiplier: ${multiplier.toFixed(2)}X`);
-
-        if (isWin) {
-          // User WON - payout already calculated above from positions table
-          console.log(`🎉 Winner: ${isYou ? 'YOU' : '@' + username} won $${payout.toFixed(2)} (bet: $${amount.toFixed(2)} × ${multiplier.toFixed(1)}X)`);
-
-          newActivities.push({
-            id: `won_${bet.user_address}_${settlementTimeperiodId}_${Date.now()}_${Math.random()}`,
-            type: 'won',
-            username: isYou ? undefined : username,
-            amount: payout, // Show the PAYOUT from positions table
-            multiplier,
-            isYou: !!isYou,
-            timestamp: Date.now(),
-          });
-        } else {
-          // User LOST - show "Added to pool $amount"
-          console.log(`💸 Lost bet added to pool: $${amount.toFixed(2)} from ${isYou ? 'YOU' : '@' + username}`);
-
-          newActivities.push({
-            id: `pool_${bet.user_address}_${settlementTimeperiodId}_${Date.now()}_${Math.random()}`,
-            type: 'pool_added',
-            username: isYou ? undefined : username,
-            amount: amount, // Show the bet amount that was lost
-            isYou: !!isYou,
-            timestamp: Date.now(),
-          });
-        }
-      });
-      
-      // Add new activities to the top of the feed
-      if (newActivities.length > 0) {
-        console.log(`📢 Adding ${newActivities.length} activities to feed:`, newActivities.map(a => `${a.type}: ${a.isYou ? 'YOU' : a.username} $${a.amount.toFixed(2)}`));
-        
-        // Mark new items as highlighted
-        const highlightedActivities = newActivities.map(activity => ({
-          ...activity,
-          isNew: true
-        }));
-        
-        setActivityFeed((prev) => {
-          const combined = [...highlightedActivities, ...prev];
-          console.log(`📋 Activity feed now has ${combined.length} items`);
-          return combined.slice(0, 20); // Keep last 20 items
+        console.log('📥 Activity feed: Bet settlement update:', { 
+          event_id: bet.event_id, 
+          status: newStatus, 
+          amount: bet.amount,
+          multiplier: bet.multiplier 
         });
-        
-        // Auto-scroll to top to show new items
-        setTimeout(() => {
-          if (activityFeedRef.current) {
-            activityFeedRef.current.scrollTop = 0;
-          }
-        }, 10);
-        
-        // Remove highlight after 3 seconds
-        setTimeout(() => {
-          setActivityFeed((prev) => 
-            prev.map(item => 
-              highlightedActivities.some(na => na.id === item.id) 
-                ? { ...item, isNew: false }
-                : item
-            )
-          );
-        }, 3000);
-      }
-    };
-    
-    updateActivityFeedFromSettlement();
-  }, [settlementsMessage, address, realtimeBets, priceStep]);
 
-  // Real-time bet placement tracking: DISABLED - Only show settlements (wins/losses)
-  // We don't show "added to pool" for bet placements anymore, only for losses after settlement
+        // Skip if already processed
+        const dedupeKey = `settlement_${bet.event_id}_${newStatus}`;
+        if (processedFeedSettlementsRef.current.has(dedupeKey)) return;
+        processedFeedSettlementsRef.current.add(dedupeKey);
+
+        const isYou = bet.user_address.toLowerCase() === address.toLowerCase();
+        const amount = parseFloat(bet.amount) / 1e6; // Convert from USDC precision
+        const multiplier = bet.multiplier ? parseFloat(bet.multiplier.toString()) : 1.5;
+
+        // Fetch username for non-self entries
+        let username = bet.user_address.slice(0, 6);
+        if (!isYou) {
+          try {
+            const { data: profile } = await supabase
+              .from('users')
+              .select('username')
+              .ilike('wallet_address', bet.user_address)
+              .single();
+            
+            if (profile?.username) {
+              username = `@${profile.username}`;
+            }
+          } catch (err) {
+            // Use truncated address as fallback
+          }
+        }
+
+        if (newStatus === 'won') {
+          // User won - show "You won $X (multiplier)" or "@username won $X (multiplier)"
+          const payout = amount * multiplier;
+          const newActivity = {
+            id: `won_${bet.event_id}_${Date.now()}`,
+            type: 'won' as const,
+            username: isYou ? undefined : username,
+            amount: payout,
+            multiplier: multiplier,
+            isYou,
+            timestamp: Date.now(),
+            isNew: true,
+          };
+
+          setActivityFeed((prev) => {
+            const combined = [newActivity, ...prev];
+            return combined.slice(0, 20);
+          });
+
+          // Auto-scroll to top
+          setTimeout(() => {
+            if (activityFeedRef.current) {
+              activityFeedRef.current.scrollTop = 0;
+            }
+          }, 10);
+
+          // Remove highlight after 3 seconds
+          setTimeout(() => {
+            setActivityFeed((prev) =>
+              prev.map(item =>
+                item.id === newActivity.id ? { ...item, isNew: false } : item
+              )
+            );
+          }, 3000);
+        } else if (newStatus === 'lost') {
+          // User lost - show "Added to pool $X"
+          const newActivity = {
+            id: `pool_${bet.event_id}_${Date.now()}`,
+            type: 'pool_added' as const,
+            username: isYou ? undefined : username,
+            amount: amount,
+            isYou,
+            timestamp: Date.now(),
+            isNew: true,
+          };
+
+          setActivityFeed((prev) => {
+            const combined = [newActivity, ...prev];
+            return combined.slice(0, 20);
+          });
+
+          // Auto-scroll to top
+          setTimeout(() => {
+            if (activityFeedRef.current) {
+              activityFeedRef.current.scrollTop = 0;
+            }
+          }, 10);
+
+          // Remove highlight after 3 seconds
+          setTimeout(() => {
+            setActivityFeed((prev) =>
+              prev.map(item =>
+                item.id === newActivity.id ? { ...item, isNew: false } : item
+              )
+            );
+          }, 3000);
+        }
+      })
+      .subscribe((status) => {
+        console.log('📡 Activity feed subscription status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Activity feed Supabase realtime connected (bet_placed_with_session)');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('❌ Activity feed channel error');
+        } else if (status === 'TIMED_OUT') {
+          console.error('❌ Activity feed subscription timed out');
+        }
+      });
+
+    return () => {
+      console.log('🔌 Removing activity feed channel');
+      supabase.removeChannel(activityChannel);
+    };
+  }, [address]);
+
+ 
   const processedBetIdsRef = useRef<Set<string>>(new Set());
   
-  // Commented out bet placement tracking - we only show settlement results
-  /*
-  useEffect(() => {
-    if (!realtimeBets || realtimeBets.length === 0) return;
-    
-    // Check for new bets
-    realtimeBets.forEach(async (bet) => {
-      const betId = `${bet.grid_id}_${bet.user_address}_${bet.created_at}`;
-      
-      // Skip if already processed
-      if (processedBetIdsRef.current.has(betId)) return;
-      
-      processedBetIdsRef.current.add(betId);
-      
-      const isYou = address && bet.user_address.toLowerCase() === address.toLowerCase();
-      
-      // Fetch username for the user
-      let username = bet.user_address.slice(0, 6);
-      try {
-        const { data: profile } = await supabase
-          .from('users')
-          .select('username')
-          .eq('wallet_address', bet.user_address.toLowerCase())
-          .maybeSingle();
-        
-        if (profile?.username) {
-          username = profile.username;
-        }
-      } catch (err) {
-        console.error('Error fetching username:', err);
-      }
-      
-      // Add bet placement to activity feed
-      const newActivity = {
-        id: `bet_${betId}_${Date.now()}_${Math.random()}`,
-        type: 'pool_added' as const,
-        username: isYou ? undefined : username,
-        amount: bet.amount,
-        isYou: !!isYou,
-        timestamp: Date.now(),
-        isNew: true
-      };
-      
-      console.log(`💰 New bet placed: ${isYou ? 'YOU' : '@' + username} added $${bet.amount.toFixed(2)} to pool`);
-      
-      setActivityFeed((prev) => {
-        // Check if this bet is already in feed (avoid duplicates)
-        const exists = prev.some(item => item.id.includes(betId));
-        if (exists) return prev;
-        
-        const combined = [newActivity, ...prev];
-        return combined.slice(0, 20); // Keep last 20 items
-      });
-      
-      // Auto-scroll to top
-      setTimeout(() => {
-        if (activityFeedRef.current) {
-          activityFeedRef.current.scrollTop = 0;
-        }
-      }, 10);
-      
-      // Remove highlight after 3 seconds
-      setTimeout(() => {
-        setActivityFeed((prev) => 
-          prev.map(item => 
-            item.id === newActivity.id 
-              ? { ...item, isNew: false }
-              : item
-          )
-        );
-      }, 3000);
-    });
-  }, [realtimeBets, address]);
-  */
-
-  // Chart configuration
   const DURATION = CHART_CONFIG.DURATION_SECONDS - 6; // Chart history duration (reduced by 6 seconds for better performance)
   const UPDATE_MS = CHART_CONFIG.UPDATE_INTERVAL_MS; // Update interval for smooth 60fps animation
   const GRID_SEC = GRID_CONFIG.GRID_SECONDS; // Each grid cell represents 5 seconds
@@ -929,26 +800,25 @@ export default function TradingChart({
    * @returns { multiplier, betAmount, payout, nextUserMultiplier }
    */
   const calculateCellBetInfo = (cellTime: number, priceLevel: number) => {
-    const timeperiodId = Math.floor(cellTime / 5) * 5; // 5-second grids
+    const timeperiodId = Math.floor(cellTime / 5) * 5 -GRID_SEC; // 5-second grids
     const timeUntilStart = timeperiodId - Math.floor(Date.now() / 1000);
     const timeBucket = getTimeBucket(timeUntilStart);
     const cacheKey = `${timeperiodId}_${priceLevel.toFixed(priceDecimals)}_${timeBucket}`;
     const cached = multiplierCache.current.get(cacheKey);
     const multiplier = cached ? cached.multiplier : getQuickMultiplier(timeperiodId);
     
-    // Get bet amount from localStorage
+   
     const savedAmount = typeof window !== 'undefined' ? localStorage.getItem('userAmount') : null;
-    const betAmount = savedAmount ? parseFloat(savedAmount) : 0.2;
+    const betAmount = savedAmount ? parseFloat(savedAmount) : 1 ;
     const payout = betAmount * multiplier;
     
-    // DON'T calculate nextUserMultiplier here - wait for bet confirmation
-    // This ensures 100% accuracy with real data from Supabase
+    
     
     return { 
       multiplier, 
       betAmount, 
       payout, 
-      nextUserMultiplier: undefined  // Will be calculated after confirmation
+      nextUserMultiplier: undefined  
     };
   };
   
@@ -969,7 +839,7 @@ export default function TradingChart({
     priceMax: number
   ): Promise<number | undefined> => {
     try {
-      console.log('🔴 [REAL Next User Multiplier] Fetching real data...');
+      
       
       // Fetch REAL total_share from Supabase
       const { data: betPlacedData, error } = await supabase
@@ -981,36 +851,25 @@ export default function TradingChart({
         .maybeSingle();
 
       if (error || !betPlacedData || !betPlacedData.total_share) {
-        console.log('⚠️  No total_share found yet');
+        
         return undefined;
       }
 
       // Convert from USDC precision (1e6) to decimal
       const realTotalShares = parseFloat(betPlacedData.total_share) / 1e6;
-      console.log(`✅ Real total_share (raw): ${betPlacedData.total_share}`);
-      console.log(`✅ Real total_share (decimal): ${realTotalShares}`);
+      
 
       // Get bet amount
       const savedAmount = typeof window !== 'undefined' ? localStorage.getItem('userAmount') : null;
-      const betAmount = savedAmount ? parseFloat(savedAmount) : 0.2;
+      const betAmount = savedAmount ? parseFloat(savedAmount) : 1;
 
-      // Calculate what NEXT user will see (with current real shares)
-      // Convert decimal shares (0.4) back to 1e6 format (400000) before BigInt conversion
       const existingSharesBigInt = toShareFormat(realTotalShares);
       const betAmountUSDC = toUSDCFormat(betAmount);
-      
-      // ============================================
-      // COMPREHENSIVE B DECAY & MULTIPLIER LOGGING
-      // ============================================
+
       
       const currentTime = Math.floor(Date.now() / 1000);
       const timeUntilStart = timeperiodId - currentTime;
       const dynamicB = calculateDynamicB(timeperiodId);
-      
-      console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-      console.log(`⏰ Time until start: ${timeUntilStart} seconds (${Math.floor(timeUntilStart / 60)}:${(timeUntilStart % 60).toString().padStart(2, '0')})`);
-      console.log(`🎚️  Dynamic B: ${(Number(dynamicB) / 1e6).toFixed(6)} USDC`);
-      console.log(`   📉 B Progress: ${((10 - Number(dynamicB) / 1e6) / 8 * 100).toFixed(1)}% decayed (10 → ${(Number(dynamicB) / 1e6).toFixed(2)} → 2)`);
       
       // Show time-based pricing tier
       let timeTier = '';
@@ -1018,11 +877,7 @@ export default function TradingChart({
       else if (timeUntilStart > 25) timeTier = '25-40 sec (0.35 base)';
       else if (timeUntilStart > 15) timeTier = '15-25 sec (0.5 base)';
       else timeTier = '<15 sec (0.66 base)';
-      console.log(`📍 Time tier: ${timeTier}`);
-      console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
       
-      console.log(`🔢 Existing shares: ${realTotalShares.toFixed(4)} (${existingSharesBigInt.toString()} in 1e6)`);
-      console.log(`💵 Bet amount: $${betAmount} (${betAmountUSDC.toString()} in 1e6)`);
       
       const { shares: nextUserShares } = calculateShares(
         existingSharesBigInt,
@@ -1030,28 +885,21 @@ export default function TradingChart({
         timeperiodId
       );
       
-      console.log(`➕ Next user shares: ${(Number(nextUserShares) / 1e6).toFixed(4)} (${nextUserShares.toString()} in 1e6)`);
       
       const nextSharesTotal = existingSharesBigInt + nextUserShares;
-      console.log(`📊 Total shares after bet: ${(Number(nextSharesTotal) / 1e6).toFixed(4)} (${nextSharesTotal.toString()} in 1e6)`);
       
       const nextPricePerShare = calculatePricePerShare(nextSharesTotal, timeperiodId);
-      console.log(`💰 Next price per share: ${(Number(nextPricePerShare) / 1e18).toFixed(6)} ($${nextPricePerShare.toString()})`);
       
       // Break down the price calculation for debugging (FIXED: use existing shares, not total!)
       const shareAdjustment = (Number(existingSharesBigInt) * 1e18) / Number(dynamicB);
       const shareAdjustmentDecimal = shareAdjustment / 1e18;
-      console.log(`🔧 Share adjustment: ${shareAdjustmentDecimal.toFixed(6)} (from ${realTotalShares.toFixed(4)} shares / ${(Number(dynamicB) / 1e6).toFixed(2)} B)`);
       
       // Calculate base price for next user
       const timeBasedPrice = timeUntilStart > 40 ? 0.2 : timeUntilStart > 25 ? 0.35 : timeUntilStart > 15 ? 0.5 : 0.66;
       const effectiveBase = Math.max(timeBasedPrice, 0.2);
-      console.log(`📊 Price breakdown: base=${effectiveBase.toFixed(2)} + shareAdj=${shareAdjustmentDecimal.toFixed(4)} = ${(effectiveBase + shareAdjustmentDecimal).toFixed(4)}`);
       
       const nextUserMultiplier = getMultiplierValue(nextPricePerShare);
 
-      console.log(`🔴 REAL Next User Multiplier: ${nextUserMultiplier.toFixed(2)}x`);
-      console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
       
       return nextUserMultiplier;
     } catch (error) {
@@ -1118,8 +966,7 @@ export default function TradingChart({
         timeUntilStart
       });
 
-      // Attach existingShares to a secondary cache map or reuse the same object
-      // We'll encode it into the same value object for simplicity
+      
       const cached = multiplierCache.current.get(cacheKey);
       if (cached) cached.existingShares = res.existingShares;
 
@@ -1171,7 +1018,7 @@ export default function TradingChart({
   return totalCount;
   };
 
-  // Update target price from WebSocket
+  // Update target price from WebSocket and send to Web Worker
     useEffect(() => {
     if (wsPrice > 0) {
       // If this is the first real price update, set immediately (no interpolation)
@@ -1179,91 +1026,20 @@ export default function TradingChart({
         priceRef.current = wsPrice;
       }
       targetPriceRef.current = wsPrice;
+      
+      // Send price update to Web Worker for continuous background plotting
+      if (priceWorkerRef.current) {
+        priceWorkerRef.current.postMessage({ 
+          type: 'PRICE_UPDATE', 
+          data: { price: wsPrice } 
+        });
+      }
     }
   }, [wsPrice]);
 
-  // REAL-TIME BET NOTIFICATIONS - Show "Added to pool" immediately when bets are placed
-  const instantBetNotificationsRef = useRef<Set<string>>(new Set());
   
-  useEffect(() => {
-    if (!realtimeBets || realtimeBets.length === 0) return;
-    
-    // Find NEW bets that we haven't processed yet
-    const newBets = realtimeBets.filter(bet => {
-      const betId = `${bet.user_address}_${bet.timeperiod_id}_${bet.price_level}_${bet.created_at}`;
-      return !instantBetNotificationsRef.current.has(betId);
-    });
-    
-    if (newBets.length === 0) return;
-    
-    // Fetch usernames for the new bets
-    const fetchAndShowBets = async () => {
-      const userAddresses = Array.from(new Set(newBets.map(bet => bet.user_address)));
-      const usernameMap = new Map<string, string>();
-      
-      try {
-        const { data: profiles } = await supabase
-          .from('users')
-          .select('wallet_address, username');
-        
-        if (profiles) {
-          profiles.forEach(profile => {
-            usernameMap.set(profile.wallet_address.toLowerCase(), profile.username);
-          });
-        }
-      } catch (err) {
-        console.error('Error fetching usernames for real-time bets:', err);
-      }
-      
-      const newActivities: typeof activityFeed = [];
-      
-      newBets.forEach(bet => {
-        const betId = `${bet.user_address}_${bet.timeperiod_id}_${bet.price_level}_${bet.created_at}`;
-        instantBetNotificationsRef.current.add(betId);
-        
-        const isYou = address && bet.user_address.toLowerCase() === address.toLowerCase();
-        const username = usernameMap.get(bet.user_address.toLowerCase()) || bet.user_address.slice(0, 6);
-        const amount = typeof bet.amount === 'string' ? parseFloat(bet.amount) : bet.amount;
-        
-        console.log(`💰 INSTANT bet notification: ${isYou ? 'YOU' : '@' + username} added $${amount.toFixed(2)} to pool`);
-        
-        newActivities.push({
-          id: `instant_${betId}_${Date.now()}`,
-          type: 'pool_added',
-          username: isYou ? undefined : username,
-          amount: amount,
-          isYou: !!isYou,
-          timestamp: Date.now(),
-          isNew: true
-        });
-      });
-      
-      if (newActivities.length > 0) {
-        setActivityFeed((prev) => {
-          const combined = [...newActivities, ...prev];
-          return combined.slice(0, 20);
-        });
-        
-        // Auto-scroll to top
-        setTimeout(() => {
-          if (activityFeedRef.current) {
-            activityFeedRef.current.scrollTop = 0;
-          }
-        }, 10);
-        
-        // Remove highlight after 3 seconds
-        setTimeout(() => {
-          setActivityFeed((prev) => 
-            prev.map(item => ({ ...item, isNew: false }))
-          );
-        }, 3000);
-      }
-    };
-    
-    fetchAndShowBets();
-  }, [realtimeBets, address]);
+  const instantBetNotificationsRef = useRef<Set<string>>(new Set());
 
-  // Process real-time bets and group by grid_id (EXCLUDE current user's bets)
   useEffect(() => {
     if (realtimeBets && realtimeBets.length > 0) {
       // Filter out current user's bets - only show OTHER users' bets
@@ -1281,12 +1057,9 @@ export default function TradingChart({
       });
       
       allUsersBetsRef.current = betsByGrid;
-      console.log('📊 Updated OTHER users bets (excluding yours):', betsByGrid.size, 'unique grids');
       if (betsByGrid.size > 0) {
-        console.log('📊 Sample grid IDs:', Array.from(betsByGrid.keys()).slice(0, 3));
         betsByGrid.forEach((bets, gridId) => {
-          console.log(`   Grid ${gridId}: ${bets.length} bet(s) from users:`, bets.map(b => b.user_address.substring(0, 10) + '...'));
-        });
+          });
       }
     }
   }, [realtimeBets, address]); // Added address to dependencies
@@ -1348,8 +1121,7 @@ export default function TradingChart({
         });
 
         if (restoredCount > 0) {
-          console.log('⚡ Instantly restored', restoredCount, 'bets from localStorage');
-          forceUpdate();
+         forceUpdate();
         }
       }
     } catch (error) {
@@ -1393,12 +1165,12 @@ export default function TradingChart({
   useEffect(() => {
     const loadUserBets = async () => {
       if (!address) {
-        console.log('⚠️ No wallet address connected, skipping bet restoration');
+        
         return;
       }
 
       try {
-        console.log('🔄 Loading user bets from database for address:', address);
+        
         
         // Fetch user's bets from last 24 hours
         const twentyFourHoursAgo = Math.floor(Date.now() / 1000) - 86400;
@@ -1416,11 +1188,11 @@ export default function TradingChart({
         }
 
         if (!userBets || userBets.length === 0) {
-          console.log('ℹ️ No previous bets found for user');
+          
           return;
         }
 
-        console.log('✅ Loaded', userBets.length, 'bets from database');
+        
 
         // Restore bets to selectedCellsRef
         const now = Date.now() / 1000;
@@ -1464,11 +1236,11 @@ export default function TradingChart({
           restoredCount++;
         });
 
-        console.log('✅ Restored', restoredCount, 'bets with their Win/Loss status');
+        
         forceUpdate();
 
       } catch (error) {
-        console.error('❌ Exception loading user bets:', error);
+        
       }
     };
 
@@ -1485,14 +1257,14 @@ export default function TradingChart({
           if (canvas) {
             canvas.style.cursor = 'crosshair';
           }
-          console.log('🎯 Multi-select mode ENABLED (press M again to disable)');
+          
         } else {
           isInDragSelectionModeRef.current = false;
           const canvas = canvasRef.current;
           if (canvas) {
             canvas.style.cursor = 'default';
           }
-          console.log('❌ Multi-select mode DISABLED');
+         
         }
       }
     };
@@ -1535,13 +1307,12 @@ export default function TradingChart({
             const timeBucket = getTimeBucket(timeUntilStart);
             const cacheKey = `${timeperiodId}_${bet.price_level.toFixed(priceDecimals)}_${timeBucket}`;
 
-            // ⚡ STEP 1: OPTIMISTIC UPDATE (INSTANT - <1ms)
-            // Estimate new total shares using cached data
+           
             const cached = multiplierCache.current.get(cacheKey);
             const previousExistingShares = cached?.existingShares || 0;
             const estimatedExistingShares = previousExistingShares + bet.shares;
             
-            // Determine base price using contract-accurate logic
+            
             let effectiveBasePrice: number;
             if (estimatedExistingShares === bet.shares) {
               // This is the FIRST bet in this grid (estimated = new bet's shares)
@@ -1550,15 +1321,15 @@ export default function TradingChart({
               else if (timeUntilStart < 40) effectiveBasePrice = 0.35;
               else effectiveBasePrice = 0.2;
             } else {
-              // Subsequent bets: use MAX(time-based, 0.2) = 0.2
+              
               effectiveBasePrice = 0.2;
             }
             
-            // Calculate dynamic B using contract-accurate exponential decay
+            
             const b = calculateDynamicB(timeperiodId);
             const bNumber = Number(b) / 1e6; // Convert from USDC units (1e6) to decimal
             
-            // Calculate optimistic multiplier using exact contract formula
+            
             const currentPrice = effectiveBasePrice + (estimatedExistingShares / bNumber);
             const optimisticMultiplier = 1 / currentPrice;
             
@@ -1570,26 +1341,14 @@ export default function TradingChart({
               existingShares: estimatedExistingShares,
               isOptimistic: true  // Flag as optimistic
             });
-            
-            // console.log('⚡ OPTIMISTIC multiplier (instant):', {
-            //   cacheKey,
-            //   previousShares: previousExistingShares,
-            //   newBetShares: bet.shares,
-            //   estimatedTotal: estimatedExistingShares,
-            //   basePrice: effectiveBasePrice,
-            //   dynamicB: bNumber.toFixed(2),
-            //   price: currentPrice.toFixed(4),
-            //   multiplier: optimisticMultiplier.toFixed(2) + 'x',
-            //   latency: '<1ms'
-            // });
+          
 
-            // ✅ STEP 2: FETCH REAL DATA (background - non-blocking)
+           
             if (typeof (bet as any).total_share === 'number') {
-              // Fast path: total_share is already in payload (from useRealtimeBets)
+             
               const realExistingShares = (bet as any).total_share as number;
               
-              // Recalculate with REAL shares using contract logic
-              // NOTE: total_share includes the current bet, so if realExistingShares === bet.shares, this is the FIRST bet
+             
               let realBasePrice: number;
               if (realExistingShares === bet.shares) {
                 // This is the FIRST bet in this grid (total_share = current bet's shares)
@@ -1619,19 +1378,10 @@ export default function TradingChart({
               const percentDiff = (difference / realMultiplier) * 100;
               const diffSymbol = difference < 0.01 ? '✅' : difference < 0.1 ? '⚠️' : '❌';
               
-              console.log(`${diffSymbol} REAL multiplier (confirmed):`, {
-                cacheKey,
-                realShares: realExistingShares,
-                optimistic: optimisticMultiplier.toFixed(4) + 'x',
-                real: realMultiplier.toFixed(4) + 'x',
-                difference: difference.toFixed(4),
-                percentDiff: percentDiff.toFixed(2) + '%',
-                accuracy: percentDiff < 1 ? 'EXCELLENT' : percentDiff < 5 ? 'GOOD' : 'NEEDS_REVIEW'
-              });
+              
               
             } else {
-              // Fallback: fetch from database (slower path)
-              console.log('⏳ Fetching real multiplier from database...');
+              
               const fetchStartTime = Date.now();
               
               const res = await getGridMultiplier(timeperiodId, bet.price_level, priceStep);
@@ -1651,16 +1401,7 @@ export default function TradingChart({
               const percentDiff = (difference / res.multiplier) * 100;
               const diffSymbol = difference < 0.01 ? '✅' : difference < 0.1 ? '⚠️' : '❌';
               
-              console.log(`${diffSymbol} REAL multiplier (from DB):`, {
-                cacheKey,
-                realShares: res.existingShares,
-                optimistic: optimisticMultiplier.toFixed(4) + 'x',
-                real: res.multiplier.toFixed(4) + 'x',
-                difference: difference.toFixed(4),
-                percentDiff: percentDiff.toFixed(2) + '%',
-                dbLatency: fetchLatency + 'ms',
-                accuracy: percentDiff < 1 ? 'EXCELLENT' : percentDiff < 5 ? 'GOOD' : 'NEEDS_REVIEW'
-              });
+              
             }
           } catch (err) {
             console.error('❌ Error in optimistic multiplier update:', err);
@@ -1707,53 +1448,93 @@ export default function TradingChart({
       resizeObserver.observe(canvas.parentElement);
     }
 
-    // Update price with smooth interpolation
-    let lastUpdateTime = 0;
-    const updatePrice = (currentTime: number) => {
-      // Check if we should start plotting (UTC seconds is multiple of 5)
-      if (!hasStartedPlottingRef.current) {
-        const now = new Date();
-        const utcSeconds = now.getUTCSeconds();
+   
+    // Initialize Web Worker if not already running
+    if (!priceWorkerRef.current && typeof window !== 'undefined' && window.Worker) {
+      try {
+        const worker = new Worker('/priceWorker.js');
+        priceWorkerRef.current = worker;
         
-        if (utcSeconds % 5 === 0) {
-          hasStartedPlottingRef.current = true;
-          const unixTime = Math.floor(now.getTime() / 1000);
-          console.log('📊 Starting plot at UTC seconds:', utcSeconds);
-          console.log('📊 Unix timestamp:', unixTime);
-          console.log('📊 Full date:', now.toISOString());
-        } else {
-          // Keep checking until we hit a multiple of 5
-          requestAnimationFrame(updatePrice);
-          return;
-        }
+        // Handle messages from worker
+        worker.onmessage = (e: MessageEvent) => {
+          const { type, data } = e.data;
+          
+          switch (type) {
+            case 'DATA_POINT':
+              // Add data point to history (worker sends these continuously)
+              // This keeps the history updated even when tab is hidden
+              const t = data.t;
+              historyRef.current = [
+                ...historyRef.current.filter((d: DataPoint) => t - d.t < DURATION * 2),
+                { t: data.t, v: data.v }
+              ];
+              priceRef.current = data.v;
+              break;
+              
+            case 'STARTED_PLOTTING':
+              hasStartedPlottingRef.current = true;
+              break;
+              
+            case 'STATE':
+             if (data.history && data.history.length > 0) {
+                console.log('📺 Catch-up sync: replacing', historyRef.current.length, 'points with', data.history.length, 'points from worker');
+                historyRef.current = data.history;
+                priceRef.current = data.currentPrice;
+                targetPriceRef.current = data.targetPrice || data.currentPrice;
+                hasStartedPlottingRef.current = data.hasStartedPlotting;
+              }
+              break;
+          }
+        };
+        
+        worker.onerror = (err) => {
+          console.error('Price Worker error:', err);
+        };
+        
+        // Start the worker with initial price
+        const initialPrice = wsPrice > 0 ? wsPrice : (initialBasePrice || 38.12);
+        worker.postMessage({ 
+          type: 'START', 
+          data: { initialPrice } 
+        });
+        
+        
+      } catch (err) {
+        console.error('Failed to create Web Worker:', err);
       }
-
-      if (currentTime - lastUpdateTime >= UPDATE_MS) {
-        const t = Date.now() / 1000;
-        const currentPrice = priceRef.current;
-        const targetPrice = targetPriceRef.current;
-        
-        // Smooth interpolation towards target price
-        const lerpFactor = 0.2; // Increased from 0.1 for faster, smoother movement
-        const newPrice = currentPrice + (targetPrice - currentPrice) * lerpFactor;
-        
-        // If no WebSocket data, add small random movement for demo
-        if (wsPrice <= 0) {
-          const randomMovement = (Math.random() - 0.5) * 0.0001;
-          targetPriceRef.current = targetPrice + randomMovement;
-        }
-        
-        priceRef.current = newPrice;
-        historyRef.current = [
-          ...historyRef.current.filter((d) => t - d.t < DURATION * 2),
-          { t, v: newPrice },
-        ];
-        lastUpdateTime = currentTime;
-      }
-      requestAnimationFrame(updatePrice);
-    };
+    }
     
-    const gen = requestAnimationFrame(updatePrice);
+    // Handle visibility change - notify worker and sync when tab becomes visible
+    const handleVisibilityChange = () => {
+      if (priceWorkerRef.current) {
+        // Always notify worker about visibility change (for throttling optimization)
+        priceWorkerRef.current.postMessage({ 
+          type: 'VISIBILITY_CHANGE', 
+          data: { hidden: document.hidden } 
+        });
+        
+        if (!document.hidden) {
+          // Tab became VISIBLE - request full state sync for catch-up rendering
+          // Small delay to let worker process the visibility change first
+          setTimeout(() => {
+            priceWorkerRef.current?.postMessage({ type: 'SYNC' });
+            }, 50);
+        } else {
+          }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    // Send initial visibility state to worker
+    if (priceWorkerRef.current) {
+      priceWorkerRef.current.postMessage({ 
+        type: 'VISIBILITY_CHANGE', 
+        data: { hidden: document.hidden } 
+      });
+    }
+    
+    // Legacy gen variable for compatibility with cleanup
+    const gen = 0; // Placeholder - no longer using requestAnimationFrame for data collection
 
     // Helper function to draw spinner in cell corner
     const drawSpinner = (ctx: CanvasRenderingContext2D, x: number, y: number, size: number = 8) => {
@@ -2301,9 +2082,11 @@ export default function TradingChart({
             // const isPastCell = cellX + gridW < nowLineX;
             // const hasOtherUsersBets = !!(otherUsersBets && otherUsersBets.length > 0);
             
-            // Hide multipliers for past cells AND cells touching the NOW line
+            // Hide multipliers for past cells, cells touching the NOW line, AND one more column to the right
             // The user requested: "it should disapperar after touching now line"
-            if (isPastCell || touchesNowLine) {
+            // Also hide the column immediately to the right of NOW line (within 1 gridW)
+            const isImmediatelyAfterNowLine = cellX > nowLineX && cellX < nowLineX + gridW;
+            if (isPastCell || touchesNowLine || isImmediatelyAfterNowLine) {
               continue;
             }
             
@@ -2527,7 +2310,7 @@ export default function TradingChart({
             const cellCenterY = selTop + gridH / 2;
             
             // Show negative bet amount (how much user lost)
-            const betAmount = selected.betAmount || 0.20; // Default to $0.20 if not set
+            const betAmount = selected.betAmount || 1; // Default to $0.20 if not set
             ctx.font = "900 italic 16px Geist, sans-serif";
             ctx.fillText(`-$${betAmount.toFixed(2)}`, cellCenterX, cellCenterY);
             
@@ -2572,7 +2355,7 @@ export default function TradingChart({
                 
                 // Draw payout amount
                 ctx.font = "300 15px 'Geist',sans-serif";
-                ctx.fillText(`$${selected.payout.toFixed(2)}`, selLeft + gridW / 2, selTop + gridH / 2);
+                ctx.fillText(`$${selected.payout.toFixed(1)}`, selLeft + gridW / 2, selTop + gridH / 2);
                 
                 // Draw next user's multiplier (RED) below - only for pending (calculating...)
                 // Will show real value after confirmation
@@ -2679,7 +2462,7 @@ export default function TradingChart({
               if (selected.payout) {
                 // Figma typography: Geist, 900 weight, italic, 18px
                 ctx.font = "900 italic 16px Geist, sans-serif";
-                ctx.fillText(`$${selected.payout.toFixed(2)}`, cellCenterX, cellCenterY);
+                ctx.fillText(`$${selected.payout.toFixed(1)}`, cellCenterX, cellCenterY);
               } else {
                 // Fallback to price
                 ctx.font = "900 italic 16px Geist, sans-serif";
@@ -2785,7 +2568,7 @@ export default function TradingChart({
               if (selected.payout) {
                 // Figma typography: Geist, 900 weight, italic, 18px
                 ctx.font = "900 italic 16px Geist, sans-serif";
-                ctx.fillText(`$${selected.payout.toFixed(2)}`, cellCenterX, cellCenterY);
+                ctx.fillText(`$${selected.payout.toFixed(1)}`, cellCenterX, cellCenterY);
               } else {
                 // Fallback to price
                 ctx.font = "900 italic 16px Geist, sans-serif";
@@ -2807,7 +2590,7 @@ export default function TradingChart({
                 const profit = selected.payout && selected.betAmount 
                 ? selected.payout - selected.betAmount 
                 : selected.payout || 0;
-              const payoutText = `+$${profit.toFixed(2)}`;
+              const payoutText = `+$${profit.toFixed(1)}`;
                 
                 // Draw gradient text with stroke (simulating the CSS gradient)
                 ctx.save();
@@ -3176,11 +2959,11 @@ export default function TradingChart({
           
           // Get user's bet amount from localStorage
           const savedAmount = typeof window !== 'undefined' ? localStorage.getItem('userAmount') : null;
-          const userBetAmount = savedAmount ? parseFloat(savedAmount) : 0.2; // Default to $0.2
+          const userBetAmount = savedAmount ? parseFloat(savedAmount) : 1.0; // Default to $1
           
           // Calculate timeperiod for this hovered cell
           const hoverCellTime = hover.t - timeOffsetRef.current;
-          const hoverTimeperiodId = Math.floor(hoverCellTime / GRID_SEC) * GRID_SEC;
+          const hoverTimeperiodId = Math.floor(hoverCellTime / GRID_SEC) * GRID_SEC - (GRID_SEC);
           
           // Calculate time until start and get time bucket
           const hoverTimeUntilStart = hoverTimeperiodId - now;
@@ -3188,8 +2971,8 @@ export default function TradingChart({
           const hoverCacheKey = `${hoverTimeperiodId}_${priceLevel.toFixed(priceDecimals)}_${hoverTimeBucket}`;
           
           // Check if other users have bets on this grid - if so, use RED nextUserMultiplier
-          const priceMin = priceLevel - priceStep / 2;
-          const priceMax = priceLevel + priceStep / 2;
+          const priceMin = priceLevel - priceStep ;
+          const priceMax = priceLevel;
           // Use 2 decimals to match useRealtimeBets grid ID format
           const gridId1 = `${hoverTimeperiodId}_${priceMin.toFixed(2)}_${priceMax.toFixed(2)}`;
           const gridId2 = `${hoverTimeperiodId}_${(priceLevel - priceStep).toFixed(2)}_${priceLevel.toFixed(2)}`;
@@ -3228,9 +3011,9 @@ export default function TradingChart({
             // Get cached multiplier or use quick estimate (regular multiplier)
             const hoverCached = multiplierCache.current.get(hoverCacheKey);
             if (hoverCached && (Date.now() - hoverCached.timestamp) < MULTIPLIER_CACHE_TTL) {
-              hoverMultiplier = hoverCached.multiplier;
+              hoverMultiplier = hoverCached.multiplier.toFixed(1) as unknown as number;
             } else {
-              hoverMultiplier = getQuickMultiplier(hoverTimeperiodId);
+              hoverMultiplier = getQuickMultiplier(hoverTimeperiodId).toFixed(1) as unknown as number;
               
               // Trigger async fetch if not already fetching
               if (!multiplierFetchQueue.current.has(hoverCacheKey)) {
@@ -3264,7 +3047,7 @@ export default function TradingChart({
           const hoverCellCenterY = hoverTop + gridH / 2;
           
           // Format payout text
-          const payoutText = `$${hoverPayout.toFixed(2)}`;
+          const payoutText = `$${hoverPayout.toFixed(1)}`;
           
           // Add pulsing glow effect for yellow payout (#FFDA00)
           if (multiplierColor === "#FFDA00") {
@@ -3389,9 +3172,20 @@ export default function TradingChart({
       
       // Cancel animation frames
       if (frame !== undefined) cancelAnimationFrame(frame);
-      cancelAnimationFrame(gen);
+      // Note: gen is now a placeholder, no need to cancel
       window.removeEventListener("resize", resize);
       resizeObserver.disconnect();
+      
+      // Remove visibility change listener
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      
+      // Terminate Web Worker
+      if (priceWorkerRef.current) {
+        priceWorkerRef.current.postMessage({ type: 'STOP' });
+        priceWorkerRef.current.terminate();
+        priceWorkerRef.current = null;
+        console.log('🔧 Price Worker terminated');
+      }
       
       // Clear fetch queue to cancel pending requests
       multiplierFetchQueue.current.clear();
@@ -3619,7 +3413,7 @@ export default function TradingChart({
     }
 
     // Disable hover for cells to the left of the yellow NOW line
-    if (x < nowLineX+CELL_SIZE) {
+    if (x < nowLineX+CELL_SIZE*2) {
       hoverRef.current = null;
       // Set default cursor when outside valid area
       if (!isPanning2DRef.current && !isDraggingRef.current && !isInDragSelectionModeRef.current) {
@@ -3677,7 +3471,7 @@ export default function TradingChart({
     const nowLineX = centerX + (timeOffsetRef.current * pxPerSec);
 
     // Check if we're in multi-select mode and clicking on a valid cell
-    if (isInDragSelectionModeRef.current && x >= nowLineX + CELL_SIZE) {
+    if (isInDragSelectionModeRef.current && x >= nowLineX + CELL_SIZE*2) {
       const cellInfo = getCellAtPosition(x, y);
       if (cellInfo) {
         // Start drag selection in multi-select mode
@@ -3774,7 +3568,7 @@ export default function TradingChart({
     const nowLineX = centerX + (timeOffsetRef.current * pxPerSec);
     
     // Disable selection for cells to the left of the yellow NOW line
-    if (x < nowLineX + CELL_SIZE) return;
+    if (x < nowLineX + CELL_SIZE*2) return;
 
     const cellInfo = getCellAtPosition(x, y);
     
@@ -3867,7 +3661,7 @@ export default function TradingChart({
       // ✅ CHECK IF OTHER USERS HAVE ALREADY BET ON THIS GRID
       // If yes, use the RED "next user multiplier" instead of default multiplier
       // Add small epsilon to handle floating point precision issues at boundaries
-      const timeperiodId = Math.floor((cellTime + 0.0001) / GRID_SEC) * GRID_SEC;
+      const timeperiodId = Math.floor((cellTime + 0.0001) / GRID_SEC) * GRID_SEC -GRID_SEC;
       // ✅ Use 2 decimals to match useRealtimeBets grid ID format
       const gridId = `${timeperiodId}_${priceMin.toFixed(2)}_${priceMax.toFixed(2)}`;
       const otherUsersBets = allUsersBetsRef.current.get(gridId);
@@ -3896,25 +3690,8 @@ export default function TradingChart({
           payout: finalPayout.toFixed(2),
           defaultMultiplier: betInfo.multiplier.toFixed(2) + 'x (not used)'
         });
-      } else {
-        // console.log('✅ No other users bet on this grid - using default multiplier:', {
-        //   gridId,
-        //   multiplier: finalMultiplier.toFixed(2) + 'x',
-        //   betAmount: betInfo.betAmount.toFixed(2),
-        //   payout: finalPayout.toFixed(2)
-        // });
       }
       
-      // console.log('==========================================');
-      // console.log('CELL CLICK DEBUG - Final values:', {
-      //   multiplier: finalMultiplier.toFixed(2) + 'x',
-      //   payout: finalPayout.toFixed(2),
-      //   betAmount: betInfo.betAmount.toFixed(2),
-      //   nextUserMultiplier: betInfo.nextUserMultiplier
-      // });
-      // console.log('==========================================');
-      
-      // Single click to select unselected cell - set to pending state immediately
       selectedCellsRef.current.set(cellKey, { 
         t: cellTime, 
         priceLevel,
@@ -4192,7 +3969,7 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
         style={{
           position: 'absolute',
           bottom: '0%',
-          left: 'clamp(40px, 5%, 80px)',
+          left: 'clamp(50px, 7%, 80px)',
           width: 'clamp(200px, 20%, 300px)',
           maxHeight: '25%',
           padding: '8px',
@@ -4249,7 +4026,7 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
                           fontSize: '14px',
                           fontWeight: 700,
                           fontStyle: 'italic',
-                        }}>${activity.amount.toFixed(2)} ({activity.multiplier?.toFixed(1)}X)</span>
+                        }}>${activity.amount.toFixed(1)} ({activity.multiplier?.toFixed(1)}X)</span>
                       </>
                     ) : (
                       <>
@@ -4268,7 +4045,7 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
                           fontSize: '14px',
                           fontWeight: 700,
                           fontStyle: 'italic',
-                        }}>${activity.amount.toFixed(2)} ({activity.multiplier?.toFixed(1)}X)</span>
+                        }}>${activity.amount.toFixed(1)} ({activity.multiplier?.toFixed(1)}X)</span>
                       </>
                     )}
                   </>
@@ -4286,7 +4063,7 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
                           fontSize: '14px',
                           fontWeight: 700,
                           fontStyle: 'italic',
-                        }}>+${activity.amount.toFixed(2)}</span>
+                        }}>+${activity.amount.toFixed(1)}</span>
                       </>
                     ) : (
                       <>
@@ -4300,7 +4077,7 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
                           fontSize: '14px',
                           fontWeight: 700,
                           fontStyle: 'italic',
-                        }}>+${activity.amount.toFixed(2)}</span>
+                        }}>+${activity.amount.toFixed(1)}</span>
                       </>
                     )}
                   </>
@@ -4569,7 +4346,8 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
             </span>
           </div>
         </div>
-      )}
+        )
+      }
       
       {/* Feature Coming Soon Popup */}
       {showComingSoon && (

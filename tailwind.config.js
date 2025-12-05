@@ -21,8 +21,8 @@ module.exports = {
         danger: '#ff3b30',
       },
       fontFamily: {
-        geist: ['Geist', 'sans-serif'],
-        geistMono: ['Geist Mono', 'monospace'],
+        geist: ['var(--font-geist-sans)', 'sans-serif'],
+        geistMono: ['var(--font-geist-mono)', 'monospace'],
       },
       boxShadow: {
         tooltip: '0 2px 8px rgba(0, 0, 0, 0.3)',

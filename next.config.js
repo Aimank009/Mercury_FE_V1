@@ -1,6 +1,10 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Enable experimental scroll restoration for smoother navigation
+  experimental: {
+    scrollRestoration: true,
+  },
   webpack: (config, { isServer }) => {
     // Externalize packages that should not be bundled
     config.externals.push('pino-pretty', 'lokijs', 'encoding');
