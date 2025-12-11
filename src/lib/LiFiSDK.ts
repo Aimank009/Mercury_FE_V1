@@ -1,19 +1,75 @@
-import { createConfig, getRoutes, executeRoute as lifiExecuteRoute, getTokens as lifiGetTokens, getStatus as lifiGetStatus } from '@lifi/sdk';
-import type { Route, ChainId, Token, RoutesRequest, GetStatusRequest } from '@lifi/types';
+import { createConfig, getRoutes, executeRoute as lifiExecuteRoute, getTokens as lifiGetTokens, getStatus as lifiGetStatus, getChains as lifiGetChains } from '@lifi/sdk';
+import type { Route, ChainId, Token, RoutesRequest, GetStatusRequest, ExtendedChain } from '@lifi/types';
 
 export interface ChainOption {
   id: number;
   name: string;
   key: string;
   logoURI?: string;
+  nativeToken?: {
+    symbol: string;
+    name: string;
+    decimals: number;
+    address: string;
+  };
 }
 
-export const SUPPORTED_CHAINS: ChainOption[] = [
-  { id: 1, name: 'Ethereum', key: 'ETH', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
-  { id: 42161, name: 'Arbitrum', key: 'ARB', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/arbitrum/info/logo.png' },
-  { id: 1151111081099710, name: 'Solana', key: 'SOL', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png' },
-  { id: 999, name: 'HyperEVM', key: 'HYPE', logoURI: '/image.png' },
-];
+// HyperEVM custom chain (your target destination chain)
+export const HYPEREVM_CHAIN: ChainOption = {
+  id: 999,
+  name: 'HyperEVM',
+  key: 'HYPE',
+  logoURI: '/image.png',
+};
+
+// Cache for chains
+let cachedChains: ChainOption[] | null = null;
+
+// Fetch all chains from LI.FI API
+async function fetchAllChains(): Promise<ChainOption[]> {
+  if (cachedChains) return cachedChains;
+  
+  try {
+    const chains = await lifiGetChains();
+    
+    cachedChains = chains.map((chain: ExtendedChain) => ({
+      id: chain.id,
+      name: chain.name,
+      key: chain.key,
+      logoURI: chain.logoURI,
+      nativeToken: chain.nativeToken ? {
+        symbol: chain.nativeToken.symbol,
+        name: chain.nativeToken.name,
+        decimals: chain.nativeToken.decimals,
+        address: chain.nativeToken.address,
+      } : undefined,
+    }));
+    
+    // Add HyperEVM if not already in the list
+    if (!cachedChains.find(c => c.id === HYPEREVM_CHAIN.id)) {
+      cachedChains.push(HYPEREVM_CHAIN);
+    }
+    
+    return cachedChains;
+  } catch (error) {
+    console.error('Failed to fetch chains from LI.FI:', error);
+    // Fallback to basic chains if API fails
+    return [
+      { id: 1, name: 'Ethereum', key: 'ETH', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
+      { id: 42161, name: 'Arbitrum', key: 'ARB', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/arbitrum/info/logo.png' },
+      { id: 137, name: 'Polygon', key: 'POL', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/polygon/info/logo.png' },
+      { id: 10, name: 'Optimism', key: 'OPT', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/optimism/info/logo.png' },
+      { id: 56, name: 'BNB Chain', key: 'BSC', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/binance/info/logo.png' },
+      { id: 43114, name: 'Avalanche', key: 'AVA', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/avalanche/info/logo.png' },
+      { id: 8453, name: 'Base', key: 'BAS', logoURI: 'https://raw.githubusercontent.com/coinbase/brand/master/assets/images/brand/base/logo-only/Base_Symbol_Blue.svg' },
+      { id: 1151111081099710, name: 'Solana', key: 'SOL', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png' },
+      HYPEREVM_CHAIN,
+    ];
+  }
+}
+
+// For backward compatibility - will be populated on first getChains() call
+export let SUPPORTED_CHAINS: ChainOption[] = [];
 
 // Initialize LiFi config
 createConfig({
@@ -22,7 +78,18 @@ createConfig({
 
 export class LiFiSDK {
   async getChains(): Promise<ChainOption[]> {
-    return SUPPORTED_CHAINS;
+    const chains = await fetchAllChains();
+    // Update the exported SUPPORTED_CHAINS for backward compatibility
+    SUPPORTED_CHAINS = chains;
+    return chains;
+  }
+
+  // Get only mainnet chains (excludes testnets)
+  async getMainnetChains(): Promise<ChainOption[]> {
+    const allChains = await this.getChains();
+    // Filter to popular mainnets for better UX
+    const popularChainIds = [1, 42161, 137, 10, 56, 43114, 8453, 324, 1101, 250, 100, 1151111081099710, 999];
+    return allChains.filter(c => popularChainIds.includes(c.id));
   }
 
   async getTokens(chainId: ChainId): Promise<Token[]> {

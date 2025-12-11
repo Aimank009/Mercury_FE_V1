@@ -68,25 +68,60 @@ export default function TradingChart({
     const checkSettlement = async () => {
       if (!settlementsMessage || !address) return;
       
+      // DEBUG: Log every settlement message received
+      // console.log('🔔 SETTLEMENT MESSAGE RECEIVED:', {
+      //   raw: settlementsMessage,
+      //   timeperiod_id: settlementsMessage.timeperiod_id,
+      //   price_min: settlementsMessage.price_min,
+      //   price_max: settlementsMessage.price_max,
+      //   price: settlementsMessage.price,
+      //   winning_grid_id: settlementsMessage.winning_grid_id,
+      //   timestamp: new Date().toISOString()
+      // });
+      
       const settlementTimeperiodId = settlementsMessage.timeperiod_id;
       
       // Skip if we already processed this timeperiod
       if (processedSettlementsRef.current.has(settlementTimeperiodId)) {
+        // console.log('⏭️ Already processed timeperiod:', settlementTimeperiodId);
         return;
       }
       
       processedSettlementsRef.current.add(settlementTimeperiodId);
+      // console.log('✅ Processing new settlement for timeperiod:', settlementTimeperiodId);
       
       const settlementTimeperiodIdNum = parseInt(settlementTimeperiodId);
       
       const settlementPriceMin = parseFloat(settlementsMessage.price_min || settlementsMessage.price) / 1e8;
       const settlementPriceMax = parseFloat(settlementsMessage.price_max || settlementsMessage.price) / 1e8;
       
+      console.log('Settlement price range:', {
+        priceMin: settlementPriceMin,
+        priceMax: settlementPriceMax,
+        timeperiodId: settlementTimeperiodIdNum
+      });
+      
       let foundLocalBets = false;
       const localUpdates: Array<{cellKey: string; status: string; bet: any}> = [];
       
+      // DEBUG: Log all cells being checked
+      // console.log('🔍 Checking cells against settlement:', {
+      //   totalCells: selectedCellsRef.current.size,
+      //   settlementTimeperiodId: settlementTimeperiodIdNum
+      // });
+      
       selectedCellsRef.current.forEach((cell, cellKey) => {
         const cellTimeperiodId = Math.floor((cell.t + 0.0001) / GRID_SEC) * GRID_SEC;
+        
+        // DEBUG: Log each cell being checked
+        // console.log(`  📦 Cell ${cellKey}:`, {
+        //   cellTimeperiodId,
+        //   status: cell.status,
+        //   priceMin: cell.priceMin,
+        //   priceMax: cell.priceMax,
+        //   matchesTimeperiod: cellTimeperiodId === settlementTimeperiodIdNum,
+        //   statusMatch: cell.status === 'confirmed' || cell.status === 'pending'
+        // });
         
         if (cellTimeperiodId === settlementTimeperiodIdNum && (cell.status === 'confirmed' || cell.status === 'pending')) {
           foundLocalBets = true;
@@ -97,6 +132,16 @@ export default function TradingChart({
           const isWin = settlementPriceMin < priceMax && settlementPriceMax > priceMin;
           const newStatus = isWin ? 'won' : 'lost';
           
+          // DEBUG: Log win/loss determination
+          console.log(`  🎯 WIN/LOSS CHECK for ${cellKey}:`, {
+            cellPriceMin: priceMin,
+            cellPriceMax: priceMax,
+            settlementPriceMin,
+            settlementPriceMax,
+            isWin,
+            condition: `${settlementPriceMin} < ${priceMax} && ${settlementPriceMax} > ${priceMin}`,
+            newStatus
+          });
        
           
           cell.status = newStatus;
@@ -126,7 +171,7 @@ export default function TradingChart({
         // Update database in BACKGROUND (don't wait)
         localUpdates.forEach(({ cellKey, status, bet }) => {
           if (!address) {
-            console.warn('⚠️ Cannot update bet: user address not available');
+            // console.warn('⚠️ Cannot update bet: user address not available');
             return;
           }
           
@@ -150,13 +195,13 @@ export default function TradingChart({
             .single()
             .then(({ data: betData, error: findError }) => {
               if (findError || !betData) {
-                console.warn(`⚠️ Could not find bet in database:`, findError);
-                console.warn('  - Search criteria:', {
-                  timeperiod_id: timeperiodIdStr,
-                  price_min: priceMinRaw,
-                  price_max: priceMaxRaw,
-                  user_address: address
-                });
+                // console.warn(`⚠️ Could not find bet in database:`, findError);
+                // console.warn('  - Search criteria:', {
+                //   timeperiod_id: timeperiodIdStr,
+                //   price_min: priceMinRaw,
+                //   price_max: priceMaxRaw,
+                //   user_address: address
+                // });
                 return;
               }
               
@@ -192,13 +237,13 @@ export default function TradingChart({
                     .select()
                     .then(({ data, error }) => {
                       if (error) {
-                        console.error(`❌ Error updating bet ${eventId}:`, error);
-                        console.error('  - Error code:', error.code);
-                        console.error('  - Error message:', error.message);
+                        // console.error(`❌ Error updating bet ${eventId}:`, error);
+                        // console.error('  - Error code:', error.code);
+                        // console.error('  - Error message:', error.message);
                       } else if (data && data.length > 0) {
                        
                       } else {
-                        console.warn(`⚠️ Update returned no data for bet ${eventId}`);
+                        // console.warn(`⚠️ Update returned no data for bet ${eventId}`);
                       }
                     });
                 });
@@ -225,7 +270,7 @@ export default function TradingChart({
           .in('status', ['pending', 'confirmed']);
         
         if (error) {
-          console.error('❌ Error querying user bets:', error);
+          // console.error('❌ Error querying user bets:', error);
           return;
         }
         
@@ -267,20 +312,20 @@ export default function TradingChart({
             .select();
           
           if (updateError) {
-            console.error('❌ Error updating bet status:', updateError);
-            console.error('  - Error code:', updateError.code);
-            console.error('  - Error message:', updateError.message);
-            console.error('  - Full error:', JSON.stringify(updateError, null, 2));
-            console.error('  - Event ID being searched:', bet.event_id);
+            // console.error('❌ Error updating bet status:', updateError);
+            // console.error('  - Error code:', updateError.code);
+            // console.error('  - Error message:', updateError.message);
+            // console.error('  - Full error:', JSON.stringify(updateError, null, 2));
+            // console.error('  - Event ID being searched:', bet.event_id);
             return null;
           }
           
           if (updateData && updateData.length > 0) {
             // Successfully updated
           } else {
-            console.warn(`⚠️ Update returned no data for bet ${bet.event_id}`);
-            console.warn('  - This might mean the event_id does not exist in the database');
-            console.warn('  - Event ID being searched:', bet.event_id);
+            // console.warn(`⚠️ Update returned no data for bet ${bet.event_id}`);
+            // console.warn('  - This might mean the event_id does not exist in the database');
+            // console.warn('  - Event ID being searched:', bet.event_id);
           }
           
           // Add to UI
@@ -319,7 +364,7 @@ export default function TradingChart({
         forceUpdate();
         
       } catch (error) {
-        console.error('❌ Exception checking settlement:', error);
+        // console.error('❌ Exception checking settlement:', error);
       }
     };
     
@@ -359,7 +404,7 @@ export default function TradingChart({
           .eq('timeperiod_id', settlementTimeperiodId.toString());
 
         if (error) {
-          console.error('❌ Error fetching bets for settlement:', error);
+          // console.error('❌ Error fetching bets for settlement:', error);
           return;
         }
 
@@ -389,7 +434,7 @@ export default function TradingChart({
           forceUpdate();
         }
       } catch (error) {
-        console.error('❌ Exception checking all bets for settlement:', error);
+        // console.error('❌ Exception checking all bets for settlement:', error);
       }
     };
 
@@ -522,7 +567,7 @@ export default function TradingChart({
           }
         }
       } catch (err) {
-        console.error('Error loading activity feed from localStorage:', err);
+        // console.error('Error loading activity feed from localStorage:', err);
       }
     }
   }, []);
@@ -533,7 +578,7 @@ export default function TradingChart({
       try {
         localStorage.setItem('mercury_activity_feed', JSON.stringify(activityFeed));
       } catch (err) {
-        console.error('Error saving activity feed to localStorage:', err);
+        // console.error('Error saving activity feed to localStorage:', err);
       }
     }
   }, [activityFeed]);
@@ -626,7 +671,7 @@ export default function TradingChart({
   useEffect(() => {
     if (!address) return;
 
-    console.log('📡 Setting up Supabase realtime for activity feed (bet_placed_with_session)');
+    // console.log('📡 Setting up Supabase realtime for activity feed (bet_placed_with_session)');
 
     const activityChannel = supabase
       .channel('activity_feed_bets')
@@ -648,12 +693,12 @@ export default function TradingChart({
         if (newStatus === oldStatus) return;
         if (newStatus !== 'won' && newStatus !== 'lost') return;
 
-        console.log('📥 Activity feed: Bet settlement update:', { 
-          event_id: bet.event_id, 
-          status: newStatus, 
-          amount: bet.amount,
-          multiplier: bet.multiplier 
-        });
+        // console.log('📥 Activity feed: Bet settlement update:', { 
+        //   event_id: bet.event_id, 
+        //   status: newStatus, 
+        //   amount: bet.amount,
+        //   multiplier: bet.multiplier 
+        // });
 
         // Skip if already processed
         const dedupeKey = `settlement_${bet.event_id}_${newStatus}`;
@@ -751,18 +796,18 @@ export default function TradingChart({
         }
       })
       .subscribe((status) => {
-        console.log('📡 Activity feed subscription status:', status);
+        // console.log('📡 Activity feed subscription status:', status);
         if (status === 'SUBSCRIBED') {
-          console.log('✅ Activity feed Supabase realtime connected (bet_placed_with_session)');
+          // console.log('✅ Activity feed Supabase realtime connected (bet_placed_with_session)');
         } else if (status === 'CHANNEL_ERROR') {
-          console.error('❌ Activity feed channel error');
+          // console.error('❌ Activity feed channel error');
         } else if (status === 'TIMED_OUT') {
-          console.error('❌ Activity feed subscription timed out');
+          // console.error('❌ Activity feed subscription timed out');
         }
       });
 
     return () => {
-      console.log('🔌 Removing activity feed channel');
+      // console.log('🔌 Removing activity feed channel');
       supabase.removeChannel(activityChannel);
     };
   }, [address]);
@@ -903,7 +948,7 @@ export default function TradingChart({
       
       return nextUserMultiplier;
     } catch (error) {
-      console.error('❌ Error calculating REAL next user multiplier:', error);
+      // console.error('❌ Error calculating REAL next user multiplier:', error);
       return undefined;
     }
   };
@@ -1125,7 +1170,7 @@ export default function TradingChart({
         }
       }
     } catch (error) {
-      console.error('Error loading bets from localStorage:', error);
+      // console.error('Error loading bets from localStorage:', error);
     }
   }, [address]);
 
@@ -1153,7 +1198,7 @@ export default function TradingChart({
           
           localStorage.setItem(storageKey, JSON.stringify(betsArray));
         } catch (error) {
-          console.error('Error saving bets to localStorage:', error);
+          // console.error('Error saving bets to localStorage:', error);
         }
       }
     }, 2000); // Save every 2 seconds
@@ -1183,7 +1228,7 @@ export default function TradingChart({
           .order('created_at', { ascending: false });
 
         if (error) {
-          console.error('❌ Error loading user bets:', error);
+          // console.error('❌ Error loading user bets:', error);
           return;
         }
 
@@ -1404,7 +1449,7 @@ export default function TradingChart({
               
             }
           } catch (err) {
-            console.error('❌ Error in optimistic multiplier update:', err);
+            // console.error('❌ Error in optimistic multiplier update:', err);
             // If anything fails, fall back to invalidation
             const prefix = `${bet.timeperiod_id}_${bet.price_level.toFixed(priceDecimals)}_`;
             const keysToRemove: string[] = [];
@@ -1477,7 +1522,7 @@ export default function TradingChart({
               
             case 'STATE':
              if (data.history && data.history.length > 0) {
-                console.log('📺 Catch-up sync: replacing', historyRef.current.length, 'points with', data.history.length, 'points from worker');
+                // console.log('📺 Catch-up sync: replacing', historyRef.current.length, 'points with', data.history.length, 'points from worker');
                 historyRef.current = data.history;
                 priceRef.current = data.currentPrice;
                 targetPriceRef.current = data.targetPrice || data.currentPrice;
@@ -1488,7 +1533,7 @@ export default function TradingChart({
         };
         
         worker.onerror = (err) => {
-          console.error('Price Worker error:', err);
+          // console.error('Price Worker error:', err);
         };
         
         // Start the worker with initial price
@@ -1500,7 +1545,7 @@ export default function TradingChart({
         
         
       } catch (err) {
-        console.error('Failed to create Web Worker:', err);
+        // console.error('Failed to create Web Worker:', err);
       }
     }
     
@@ -2107,16 +2152,16 @@ export default function TradingChart({
               // ctx.strokeRect(cellX, cellY, gridW, gridH);
               
               // Debug logging (can be removed later)
-              if (Math.random() < 0.01) { // Log 1% of the time to avoid spam
-                console.log('🔴 Showing RED multiplier:', {
-                  timeperiodId,
-                  priceLevel,
-                  gridId1,
-                  gridId2,
-                  foundBets: otherUsersBets.length,
-                  nextUserMultiplier: nextUserMultiplier.toFixed(2)
-                });
-              }
+              // if (Math.random() < 0.01) { // Log 1% of the time to avoid spam
+              //   console.log('🔴 Showing RED multiplier:', {
+              //     timeperiodId,
+              //     priceLevel,
+              //     gridId1,
+              //     gridId2,
+              //     foundBets: otherUsersBets.length,
+              //     nextUserMultiplier: nextUserMultiplier.toFixed(2)
+              //   });
+              // }
             }
             
             // Draw multiplier - Figma specs: Inter 900 italic 14px, centered, light gray
@@ -3184,7 +3229,7 @@ export default function TradingChart({
         priceWorkerRef.current.postMessage({ type: 'STOP' });
         priceWorkerRef.current.terminate();
         priceWorkerRef.current = null;
-        console.log('🔧 Price Worker terminated');
+        // console.log('🔧 Price Worker terminated');
       }
       
       // Clear fetch queue to cancel pending requests
@@ -3230,13 +3275,13 @@ export default function TradingChart({
     // So we need to SUBTRACT the timeOffsetRef (which inverts the negative to positive)
     const cellTime = now + timeOffsetSecNum - timeOffsetRef.current;
     
-    console.log('🔍 getCellAtPosition debug:', {
-      now,
-      timeOffsetSecNum,
-      timeOffsetRefCurrent: timeOffsetRef.current,
-      cellTime,
-      calculationBreakdown: `${now} + ${timeOffsetSecNum} - ${timeOffsetRef.current} = ${cellTime}`
-    });
+    // console.log('🔍 getCellAtPosition debug:', {
+    //   now,
+    //   timeOffsetSecNum,
+    //   timeOffsetRefCurrent: timeOffsetRef.current,
+    //   cellTime,
+    //   calculationBreakdown: `${now} + ${timeOffsetSecNum} - ${timeOffsetRef.current} = ${cellTime}`
+    // });
     
     const clickedPrice = price + priceOffset - (y - h / 2) / pxPerPrice;
     const priceLevel = Math.floor(clickedPrice / priceStep) * priceStep + priceStep;
@@ -3541,11 +3586,11 @@ export default function TradingChart({
 
   const handleClick = (e: React.MouseEvent) => {
 
-      console.log('🎯 Grid clicked!', { isPlacingOrder, onCellSelect: !!onCellSelect });
+      // console.log('🎯 Grid clicked!', { isPlacingOrder, onCellSelect: !!onCellSelect });
     
     // Check if wallet is connected
     if (!address) {
-      console.log('❌ Wallet not connected - cannot place order');
+      // console.log('❌ Wallet not connected - cannot place order');
       setShowWalletWarning(true);
       setTimeout(() => setShowWalletWarning(false), 3000); // Hide after 3 seconds
       return;
@@ -3586,7 +3631,7 @@ export default function TradingChart({
           }
         });
         
-        console.log('Clearing', cellsToDelete.length, 'drag-selected cells');
+        // console.log('Clearing', cellsToDelete.length, 'drag-selected cells');
         cellsToDelete.forEach(key => selectedCellsRef.current.delete(key));
         
         // Notify about updated selections
@@ -3612,7 +3657,7 @@ export default function TradingChart({
         }
       });
       
-      console.log('Clearing', cellsToDelete.length, 'drag-selected cells');
+      // console.log('Clearing', cellsToDelete.length, 'drag-selected cells');
       cellsToDelete.forEach(key => selectedCellsRef.current.delete(key));
       
       // Notify about updated selections
@@ -3633,7 +3678,7 @@ export default function TradingChart({
         const selectedCell = selectedCellsRef.current.get(cellKey);
         const dragSessionId = selectedCell?.dragSessionId;
         
-        console.log('Double-click detected on cell:', cellKey, 'dragSessionId:', dragSessionId);
+        // console.log('Double-click detected on cell:', cellKey, 'dragSessionId:', dragSessionId);
         
         if (dragSessionId) {
           // This cell was part of a drag selection - show "Feature Coming Soon"
@@ -3642,7 +3687,7 @@ export default function TradingChart({
           lastClickRef.current = null; // Reset after showing popup
         } else {
           // Single cell - do nothing on double-click
-          console.log('Single cell - no action on double-click');
+          // console.log('Single cell - no action on double-click');
           lastClickRef.current = { cellKey, time: currentTime };
         }
       } else {
@@ -3680,16 +3725,16 @@ export default function TradingChart({
         finalMultiplier = redMultiplier;
         finalPayout = betInfo.betAmount * redMultiplier;
         
-        console.log('🔴 Using RED next-user multiplier (other users already bet):', {
-          gridId,
-          otherUsersBets: otherUsersBets.length,
-          totalShares: totalShares.toFixed(4),
-          existingSharesBigInt: existingSharesBigInt.toString(),
-          redMultiplier: redMultiplier.toFixed(2) + 'x',
-          betAmount: betInfo.betAmount.toFixed(2),
-          payout: finalPayout.toFixed(2),
-          defaultMultiplier: betInfo.multiplier.toFixed(2) + 'x (not used)'
-        });
+        // console.log('🔴 Using RED next-user multiplier (other users already bet):', {
+        //   gridId,
+        //   otherUsersBets: otherUsersBets.length,
+        //   totalShares: totalShares.toFixed(4),
+        //   existingSharesBigInt: existingSharesBigInt.toString(),
+        //   redMultiplier: redMultiplier.toFixed(2) + 'x',
+        //   betAmount: betInfo.betAmount.toFixed(2),
+        //   payout: finalPayout.toFixed(2),
+        //   defaultMultiplier: betInfo.multiplier.toFixed(2) + 'x (not used)'
+        // });
       }
       
       selectedCellsRef.current.set(cellKey, { 
@@ -3754,12 +3799,12 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
                 // Update cell with REAL next user multiplier
                 const cellToUpdate = selectedCellsRef.current.get(cellKey);
 
-                console.log("REAL NEXT MULTIPLIER_____",realNextMultiplier);
+                // console.log("REAL NEXT MULTIPLIER_____",realNextMultiplier);
                 // console.log("CELL TO UPDATE_____",cellToUpdate);
                 
                 if (cellToUpdate && realNextMultiplier !== undefined) {
                   cellToUpdate.nextUserMultiplier = realNextMultiplier;
-                  console.log(`🔴 Updated cell with REAL nextUserMultiplier: ${realNextMultiplier.toFixed(2)}x`);
+                  // console.log(`🔴 Updated cell with REAL nextUserMultiplier: ${realNextMultiplier.toFixed(2)}x`);
                   forceUpdate(); // Trigger re-render to show RED multiplier
                 }
               }, 1500); // Wait 1.5s for database to update
@@ -3780,7 +3825,7 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
                 window.dispatchEvent(new CustomEvent('newBetPlaced', {
                   detail: { orderId: result.orderId, priceLevel, timeperiodId: Math.floor(cellTime / 5) * 5 }
                 }));
-                console.log('📢 Dispatched newBetPlaced event');
+                // console.log('📢 Dispatched newBetPlaced event');
               }
               
               // Auto-hide success popup after 2 seconds
@@ -3790,13 +3835,13 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
               if (result.error) {
                 // Check for "Transaction failed" error
                 if (result.error.toLowerCase().includes('transaction failed')) {
-                  console.log('❌ Transaction failed detected - clearing nonce storage');
+                  // console.log('❌ Transaction failed detected - clearing nonce storage');
                   clearNonceStorage();
                 }
                 
                 // Check for "invalid signature" error
                 if (result.error.toLowerCase().includes('invalid signature')) {
-                  console.log('❌ Invalid signature detected - clearing session');
+                  // console.log('❌ Invalid signature detected - clearing session');
                   clearSessionStorage();
                   
                   // Show popup
@@ -3812,18 +3857,18 @@ const realNextMultiplier = await calculateRealNextUserMultiplier(
           }
         }).catch((error) => {
           // Error placing order
-          console.error('Error placing order:', error);
+          // console.error('Error placing order:', error);
           
           // Check error message
           const errorMessage = error?.message || error?.toString() || '';
           
           if (errorMessage.toLowerCase().includes('transaction failed')) {
-            console.log('❌ Transaction failed detected - clearing nonce storage');
+            // console.log('❌ Transaction failed detected - clearing nonce storage');
             clearNonceStorage();
           }
           
           if (errorMessage.toLowerCase().includes('invalid signature')) {
-            console.log('❌ Invalid signature detected - clearing session');
+            // console.log('❌ Invalid signature detected - clearing session');
             clearSessionStorage();
             
             // Show popup

@@ -7,7 +7,7 @@ if (!SUPABASE_CONFIG.URL || !SUPABASE_CONFIG.ANON_KEY) {
   console.error('ANON_KEY:', SUPABASE_CONFIG.ANON_KEY ? 'Set' : 'Missing');
   console.error('Please check your .env file and restart the development server');
 } else {
-  console.log('✅ Supabase configured:', SUPABASE_CONFIG.URL);
+  // console.log('✅ Supabase configured:', SUPABASE_CONFIG.URL);
 }
 
 // Create Supabase client with proper configuration

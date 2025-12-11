@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useAccount, useWalletClient, useSwitchChain } from 'wagmi';
 import { useDepositWithdraw } from '../contexts/DepositWithdrawContext';
 import { useModal } from '../contexts/ModalContext';
-import { LiFiSDK, SUPPORTED_CHAINS, ChainOption } from '../lib/LiFiSDK';
+import { LiFiSDK, HYPEREVM_CHAIN, ChainOption } from '../lib/LiFiSDK';
 import { getChainBalance } from '../lib/chainBalances';
 import { ethers } from 'ethers';
 import { CONTRACTS } from '../config/contracts';
@@ -237,7 +237,9 @@ export default function DepositWithdrawModal() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
   const [currentStep, setCurrentStep] = useState<'idle' | 'approving' | 'depositing' | 'bridging'>('idle');
-  const [selectedChain, setSelectedChain] = useState<ChainOption>(SUPPORTED_CHAINS[3]); // Default to HYPE
+  const [supportedChains, setSupportedChains] = useState<ChainOption[]>([HYPEREVM_CHAIN]); // Start with HyperEVM
+  const [isLoadingChains, setIsLoadingChains] = useState(true);
+  const [selectedChain, setSelectedChain] = useState<ChainOption>(HYPEREVM_CHAIN); // Default to HYPE
   const [showChainDropdown, setShowChainDropdown] = useState(false);
   const [bridgeQuote, setBridgeQuote] = useState<Route | null>(null);
   const [lifiSDK] = useState(() => new LiFiSDK());
@@ -246,12 +248,13 @@ export default function DepositWithdrawModal() {
   const [isSwitchingChain, setIsSwitchingChain] = useState(false);
   
   // Token selection states
-  const [availableTokens, setAvailableTokens] = useState<Array<{ symbol: string; address: string; decimals: number; logo?: string }>>([]);
-  const [selectedToken, setSelectedToken] = useState<{ symbol: string; address: string; decimals: number; logo?: string } | null>(null);
+  const [availableTokens, setAvailableTokens] = useState<Array<{ symbol: string; address: string; decimals: number; logo?: string; name?: string; priceUSD?: string }>>([]);
+  const [selectedToken, setSelectedToken] = useState<{ symbol: string; address: string; decimals: number; logo?: string; name?: string; priceUSD?: string } | null>(null);
   const [showTokenDropdown, setShowTokenDropdown] = useState(false);
   const [tokenSearch, setTokenSearch] = useState('');
   const [tokenBalance, setTokenBalance] = useState<string>('');
   const [insufficientBalance, setInsufficientBalance] = useState(false);
+  const [chainSearch, setChainSearch] = useState('');
   
   // Refs for click outside detection
   const chainDropdownRef = useRef<HTMLDivElement>(null);
@@ -260,6 +263,33 @@ export default function DepositWithdrawModal() {
   const { address, chain: currentChain } = useAccount();
   const { data: walletClient } = useWalletClient();
   const { switchChainAsync } = useSwitchChain();
+
+  // Fetch chains from LI.FI on mount
+  useEffect(() => {
+    const loadChains = async () => {
+      setIsLoadingChains(true);
+      try {
+        const chains = await lifiSDK.getChains();
+        setSupportedChains(chains);
+        // console.log(`✅ Loaded ${chains.length} chains from LI.FI`);
+      } catch (error) {
+        console.error('Failed to load chains:', error);
+        // Keep default HyperEVM chain
+      } finally {
+        setIsLoadingChains(false);
+      }
+    };
+    loadChains();
+  }, [lifiSDK]);
+
+  // Filter chains by search
+  const filteredChains = chainSearch.trim()
+    ? supportedChains.filter(chain =>
+        chain.name.toLowerCase().includes(chainSearch.toLowerCase()) ||
+        chain.key.toLowerCase().includes(chainSearch.toLowerCase())
+      )
+    : supportedChains;
+
   const {
     sdk,
     isConnected,
@@ -290,26 +320,97 @@ export default function DepositWithdrawModal() {
     return 'swap'; // Swap other HyperEVM tokens to USDTO
   };
 
-  // Update available tokens when chain changes
+  // State for loading tokens
+  const [isLoadingTokens, setIsLoadingTokens] = useState(false);
+
+  // Update available tokens when chain changes - fetch from LI.FI
   useEffect(() => {
-    const tokens = CHAIN_TOKENS[selectedChain.id] || [];
-    setAvailableTokens(tokens);
-    
-    // Auto-select first token (native token of the chain)
-    if (tokens.length > 0) {
-      setSelectedToken(tokens[0]);
-    }
-  }, [selectedChain]);
+    const fetchTokensForChain = async () => {
+      // For HyperEVM (999), use hardcoded tokens as LI.FI may not have them
+      if (selectedChain.id === 999) {
+        const tokens = CHAIN_TOKENS[999] || [];
+        setAvailableTokens(tokens);
+        if (tokens.length > 0) {
+          setSelectedToken(tokens[0]);
+        }
+        return;
+      }
+
+      setIsLoadingTokens(true);
+      try {
+        // Fetch tokens from LI.FI for the selected chain
+        const lifiTokens = await lifiSDK.getTokens(selectedChain.id as any);
+        
+        console.log('🔍 LI.FI tokens sample:', lifiTokens.slice(0, 3));
+        
+        if (lifiTokens && lifiTokens.length > 0) {
+          // Map LI.FI tokens to our format
+          const mappedTokens = lifiTokens.map(token => ({
+            symbol: token.symbol,
+            address: token.address,
+            decimals: token.decimals,
+            logo: token.logoURI || '',
+            name: token.name,
+            priceUSD: token.priceUSD,
+          }));
+          
+          console.log('🔍 Mapped tokens sample:', mappedTokens.slice(0, 3));
+          
+          // Sort: native token first, then stablecoins, then by name
+          const sortedTokens = mappedTokens.sort((a, b) => {
+            // Native token (0x0...0) first
+            if (a.address === '0x0000000000000000000000000000000000000000') return -1;
+            if (b.address === '0x0000000000000000000000000000000000000000') return 1;
+            // Stablecoins next
+            const stablecoins = ['USDC', 'USDT', 'DAI', 'USDC.e', 'USDT.e'];
+            const aIsStable = stablecoins.includes(a.symbol);
+            const bIsStable = stablecoins.includes(b.symbol);
+            if (aIsStable && !bIsStable) return -1;
+            if (!aIsStable && bIsStable) return 1;
+            // Then alphabetically
+            return a.symbol.localeCompare(b.symbol);
+          });
+          
+          setAvailableTokens(sortedTokens);
+          console.log(`✅ Loaded ${sortedTokens.length} tokens for ${selectedChain.name}`);
+          
+          // Auto-select first token
+          if (sortedTokens.length > 0) {
+            setSelectedToken(sortedTokens[0]);
+          }
+        } else {
+          // Fallback to hardcoded if LI.FI returns nothing
+          const fallbackTokens = CHAIN_TOKENS[selectedChain.id] || [];
+          setAvailableTokens(fallbackTokens);
+          if (fallbackTokens.length > 0) {
+            setSelectedToken(fallbackTokens[0]);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch tokens:', error);
+        // Fallback to hardcoded tokens
+        const fallbackTokens = CHAIN_TOKENS[selectedChain.id] || [];
+        setAvailableTokens(fallbackTokens);
+        if (fallbackTokens.length > 0) {
+          setSelectedToken(fallbackTokens[0]);
+        }
+      } finally {
+        setIsLoadingTokens(false);
+      }
+    };
+
+    fetchTokensForChain();
+  }, [selectedChain, lifiSDK]);
 
   // Sync selected chain with wallet chain automatically
   useEffect(() => {
     if (currentChain) {
-      const supportedChain = SUPPORTED_CHAINS.find(c => c.id === currentChain.id);
+      const supportedChain = supportedChains.find(c => c.id === currentChain.id);
       if (supportedChain) {
         setSelectedChain(supportedChain);
       }
     }
-  }, [currentChain]);
+  }, [currentChain, supportedChains]);
 
   // Fetch token balance when token or chain changes
   useEffect(() => {
@@ -569,7 +670,7 @@ export default function DepositWithdrawModal() {
     // When switching to withdraw tab, ensure we're on HyperEVM and refresh balance
     if (tab === 'withdraw') {
       // Set chain to HyperEVM for withdraw
-      const hyperEVMChain = SUPPORTED_CHAINS.find(c => c.id === 999);
+      const hyperEVMChain = supportedChains.find(c => c.id === 999) || HYPEREVM_CHAIN;
       if (hyperEVMChain) {
         setSelectedChain(hyperEVMChain);
         setSelectedToken(CHAIN_TOKENS[999][1]); // USDTO
@@ -712,13 +813,31 @@ export default function DepositWithdrawModal() {
               {showChainDropdown && (
                 <div 
                   ref={chainDropdownRef}
-                  className="absolute top-full left-0 right-0 mt-2 bg-[#0d0d0d] border border-[#2a2a2a] rounded-xl shadow-2xl max-h-60 overflow-y-auto z-50"
+                  className="absolute top-full left-0 right-0 mt-2 bg-[#0d0d0d] border border-[#2a2a2a] rounded-xl shadow-2xl max-h-80 overflow-hidden z-50"
                 >
-                  {SUPPORTED_CHAINS.map((chain) => (
+                  {/* Search Input */}
+                  <div className="p-2 border-b border-[#2a2a2a] sticky top-0 bg-[#0d0d0d]">
+                    <input
+                      type="text"
+                      placeholder="Search chains..."
+                      value={chainSearch}
+                      onChange={(e) => setChainSearch(e.target.value)}
+                      className="w-full px-3 py-2 bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-[#00ff41]"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </div>
+                  <div className="max-h-60 overflow-y-auto">
+                  {isLoadingChains ? (
+                    <div className="px-4 py-3 text-gray-400 text-center">Loading chains...</div>
+                  ) : filteredChains.length === 0 ? (
+                    <div className="px-4 py-3 text-gray-400 text-center">No chains found</div>
+                  ) : (
+                    filteredChains.map((chain) => (
                     <button
                       key={chain.id}
                       onClick={async () => {
                         setShowChainDropdown(false);
+                        setChainSearch('');
                         
                         // For Solana (non-EVM), just select it - user needs Phantom/Solflare wallet
                         // LiFi will handle the cross-chain bridging
@@ -733,9 +852,9 @@ export default function DepositWithdrawModal() {
                           setIsSwitchingChain(true);
                           try {
                             await switchChainAsync({ chainId: chain.id });
-                            console.log(`✅ Switched to ${chain.name}`);
+                            console.log(`Switched to ${chain.name}`);
                           } catch (error: any) {
-                            console.error(`❌ Failed to switch to ${chain.name}:`, error);
+                            console.error(`Failed to switch to ${chain.name}:`, error);
                             // Still update selected chain for UI
                           } finally {
                             setIsSwitchingChain(false);
@@ -760,7 +879,9 @@ export default function DepositWithdrawModal() {
                         </svg>
                       )}
                     </button>
-                  ))}
+                  ))
+                  )}
+                  </div>
                 </div>
               )}
             </div>
@@ -855,9 +976,9 @@ export default function DepositWithdrawModal() {
               {showTokenDropdown && activeTab === 'deposit' && (
                 <div 
                   ref={tokenDropdownRef}
-                  className="absolute top-full -right-5 mt-1 w-[200px] bg-[#0d0d0d] border border-[#2a2a2a] rounded-xl shadow-2xl"
+                  className="absolute top-full -right-5 mt-1 w-[150px] bg-[#0d0d0d] border border-[#2a2a2a] rounded-xl shadow-2xl"
                   style={{ 
-                    height: '350px',
+                    height: '400px',
                     display: 'flex', 
                     flexDirection: 'column',
                     zIndex: 10000
@@ -887,43 +1008,67 @@ export default function DepositWithdrawModal() {
                       msOverflowStyle: 'none',
                     }}
                   >
-                    {availableTokens
-                      .filter(token => 
-                        token.symbol.toLowerCase().includes(tokenSearch.toLowerCase()) ||
-                        token.address.toLowerCase().includes(tokenSearch.toLowerCase())
-                      )
-                      .map((token) => (
-                        <button
-                          key={token.address}
-                          onClick={() => {
-                            setSelectedToken(token);
-                            setShowTokenDropdown(false);
-                            setTokenSearch('');
-                          }}
-                          className="w-full px-3 py-2 flex items-center gap-2 hover:bg-[#1a1a1a] transition-all duration-200"
-                        >
-                          <div className="w-5 h-5 rounded-full overflow-hidden flex-shrink-0">
-                            {token.logo ? (
-                              <img src={token.logo} alt={token.symbol} className="w-full h-full object-cover" />
-                            ) : (
-                              <div className="w-full h-full bg-gradient-to-br from-[#00ff41] to-[#00cc33]" />
-                            )}
-                          </div>
-                          <span className="text-white text-sm truncate">{token.symbol}</span>
-                          {token.address === selectedToken?.address && (
-                            <svg className="w-4 h-4 text-[#00ff41] ml-auto flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                            </svg>
-                          )}
-                        </button>
-                      ))}
-                    {availableTokens.filter(token => 
-                      token.symbol.toLowerCase().includes(tokenSearch.toLowerCase()) ||
-                      token.address.toLowerCase().includes(tokenSearch.toLowerCase())
-                    ).length === 0 && (
-                      <div className="px-3 py-4 text-gray-500 text-sm text-center">
-                        No tokens found
+                    {isLoadingTokens ? (
+                      <div className="flex items-center justify-center py-8">
+                        <svg className="w-6 h-6 text-[#00ff41] animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <span className="ml-2 text-gray-400 text-sm">Loading tokens...</span>
                       </div>
+                    ) : (
+                      <>
+                        {availableTokens
+                          .filter(token => 
+                            token.symbol.toLowerCase().includes(tokenSearch.toLowerCase()) ||
+                            token.address.toLowerCase().includes(tokenSearch.toLowerCase())
+                          )
+                          .map((token) => (
+                            <button
+                              key={token.address}
+                              onClick={() => {
+                                setSelectedToken(token);
+                                setShowTokenDropdown(false);
+                                setTokenSearch('');
+                              }}
+                              className="w-full px-3 py-2.5 flex items-center gap-3 hover:bg-[#1a1a1a] transition-all duration-200"
+                            >
+                              <div className="w-7 h-7 rounded-full overflow-hidden flex-shrink-0 bg-[#1a1a1a]">
+                                {token.logo ? (
+                                  <img 
+                                    src={token.logo} 
+                                    alt={token.symbol} 
+                                    className="w-full h-full object-cover"
+                                    onError={(e) => {
+                                      const parent = (e.target as HTMLImageElement).parentElement;
+                                      if (parent) {
+                                        parent.innerHTML = `<div class="w-full h-full bg-gradient-to-br from-[#00ff41] to-[#00cc33] flex items-center justify-center"><span class="text-black text-xs font-bold">${token.symbol.substring(0, 2)}</span></div>`;
+                                      }
+                                    }}
+                                  />
+                                ) : (
+                                  <div className="w-full h-full bg-gradient-to-br from-[#00ff41] to-[#00cc33] flex items-center justify-center">
+                                    <span className="text-black text-xs font-bold">{token.symbol.substring(0, 2)}</span>
+                                  </div>
+                                )}
+                              </div>
+                              <span className="text-white text-sm font-medium">{token.symbol}</span>
+                              {token.address === selectedToken?.address && (
+                                <svg className="w-4 h-4 text-[#00ff41] ml-auto flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                </svg>
+                              )}
+                            </button>
+                          ))}
+                        {availableTokens.filter(token => 
+                          token.symbol.toLowerCase().includes(tokenSearch.toLowerCase()) ||
+                          token.address.toLowerCase().includes(tokenSearch.toLowerCase())
+                        ).length === 0 && (
+                          <div className="px-3 py-4 text-gray-500 text-sm text-center">
+                            No tokens found
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>

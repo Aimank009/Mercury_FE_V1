@@ -58,12 +58,12 @@ export function usePnLHistory(timePeriod: TimePeriod = '30D') {
           .order('timestamp', { ascending: true })
           .limit(10000);
         
-        console.log('📊 Query result:', {
-          hasError: !!pnlError,
-          errorMessage: pnlError?.message,
-          dataLength: pnlData?.length || 0,
-          sampleData: pnlData?.slice(0, 3)
-        });
+        // console.log('📊 Query result:', {
+        //   hasError: !!pnlError,
+        //   errorMessage: pnlError?.message,
+        //   dataLength: pnlData?.length || 0,
+        //   sampleData: pnlData?.slice(0, 3)
+        // });
 
         if (pnlError) {
           console.error('❌ Error fetching PnL history:', pnlError);

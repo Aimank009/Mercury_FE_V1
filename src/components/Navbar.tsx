@@ -26,13 +26,13 @@ export default function Navbar({ onEnableTrading }: NavbarProps) {
 
   // Debug logging for balance
   useEffect(() => {
-    console.log('🎯 [Navbar] Balance debug:', {
-      address,
-      isConnected,
-      wrapperBalanceUSD,
-      isLoadingWrapper,
-      balanceError
-    });
+    // console.log('🎯 [Navbar] Balance debug:', {
+    //   address,
+    //   isConnected,
+    //   wrapperBalanceUSD,
+    //   isLoadingWrapper,
+    //   balanceError
+    // });
   }, [address, isConnected, wrapperBalanceUSD, isLoadingWrapper, balanceError]);
 
   const [showAccountMenu, setShowAccountMenu] = useState(false);

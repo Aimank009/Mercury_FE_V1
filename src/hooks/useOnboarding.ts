@@ -45,13 +45,13 @@ export function useOnboarding() {
     }
 
     const checkOnboardingStatus = async () => {
-      console.log('🔄 Checking onboarding status:', { isProfileLoading, hasProfile: !!profile, address });
+      // console.log('🔄 Checking onboarding status:', { isProfileLoading, hasProfile: !!profile, address });
       
       // OPTIMIZATION: If we have a profile (even from cache), use it immediately
       // Don't wait for loading state - this makes the UI instant for returning users
       if (profile) {
         // ✅ USER EXISTS - They are fully onboarded!
-        console.log('✅ Existing user found:', profile.username);
+        // console.log('✅ Existing user found:', profile.username);
         
         const accessKey = `mercury_access_granted_${address.toLowerCase()}`;
         // Ensure access key is set
@@ -138,13 +138,14 @@ export function useOnboarding() {
   const handleProfileCreated = () => {
     if (!address) return;
 
-    setState({
+    setState(prev => ({
+      ...prev,
       hasAcceptedTerms: true,
       hasCreatedProfile: true,
       showTermsModal: false,
       showUserCreationModal: false,
       isLoadingProfile: false,
-    });
+    }));
   };
 
   const handleCloseModal = () => {

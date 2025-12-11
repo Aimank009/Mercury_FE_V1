@@ -80,7 +80,7 @@ export function useHypePriceFeed(): UsePriceFeedReturn {
         wsRef.current = ws;
 
         ws.onopen = () => {
-          console.log('✅ Connected to HYPE price feed');
+          // console.log('✅ Connected to HYPE price feed');
           setIsConnected(true);
         };
 

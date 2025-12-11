@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabaseClient';
 
 // Fetch global liquidity from Supabase
 async function fetchGlobalLiquidity(): Promise<string> {
-  console.log('💧 Fetching initial global liquidity...');
+  // console.log('💧 Fetching initial global liquidity...');
   
   const { data, error: supabaseError } = await supabase
     .from('global_liquidity_updated')
@@ -13,12 +13,12 @@ async function fetchGlobalLiquidity(): Promise<string> {
     .limit(1);
 
   if (supabaseError) {
-    console.error('❌ Supabase error:', supabaseError);
+    // console.error('❌ Supabase error:', supabaseError);
     return '0';
   }
 
   if (!data || data.length === 0) {
-    console.log('💧 No liquidity record found, defaulting to 0');
+    // console.log('💧 No liquidity record found, defaulting to 0');
     return '0';
   }
 
@@ -26,11 +26,11 @@ async function fetchGlobalLiquidity(): Promise<string> {
   const liquidityRaw = BigInt(latestRecord.new_total);
   const liquidityUSD = Number(liquidityRaw) / 1e6;
 
-  console.log('💧 ✅ GLOBAL LIQUIDITY LOADED:', {
-    raw: latestRecord.new_total,
-    usd: liquidityUSD,
-    timestamp: latestRecord.timestamp
-  });
+  // console.log('💧 ✅ GLOBAL LIQUIDITY LOADED:', {
+  //   raw: latestRecord.new_total,
+  //   usd: liquidityUSD,
+  //   timestamp: latestRecord.timestamp
+  // });
 
   return liquidityUSD.toString();
 }
@@ -51,17 +51,20 @@ export function useGlobalLiquidity() {
   } = useQuery<string>({
     queryKey: ['globalLiquidity'],
     queryFn: fetchGlobalLiquidity,
-    staleTime: 30_000, // Consider data fresh for 30 seconds
-    gcTime: 5 * 60 * 1000, // Keep in cache for 5 minutes
-    retry: 1,
-    retryDelay: 1000,
+    staleTime: 60_000, // Consider data fresh for 60 seconds (real-time handles updates)
+    gcTime: 10 * 60 * 1000, // Keep in cache for 10 minutes
+    retry: 2,
+    retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 10000), // Exponential backoff
+    refetchOnWindowFocus: false,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
   });
 
   // Set up real-time subscription
   useEffect(() => {
     if (!supabase) return;
 
-    console.log('💧 Setting up DIRECT Supabase real-time for liquidity...');
+    // console.log('💧 Setting up DIRECT Supabase real-time for liquidity...');
 
     const liquidityChannel = supabase
       .channel('global_liquidity_changes')
@@ -70,27 +73,27 @@ export function useGlobalLiquidity() {
         schema: 'public',
         table: 'global_liquidity_updated',
       }, (payload) => {
-        console.log('💧 ⚡ DIRECT Supabase real-time event:', payload);
+        // console.log('💧 ⚡ DIRECT Supabase real-time event:', payload);
         
         if (payload.new && (payload.new as any).new_total) {
           const liquidityRaw = BigInt((payload.new as any).new_total);
           const liquidityUSD = Number(liquidityRaw) / 1e6;
           
-          console.log('💧 ⚡⚡ INSTANT LIQUIDITY UPDATE!', {
-            raw: (payload.new as any).new_total,
-            usd: liquidityUSD
-          });
+          // console.log('💧 ⚡⚡ INSTANT LIQUIDITY UPDATE!', {
+          //   raw: (payload.new as any).new_total,
+          //   usd: liquidityUSD
+          // });
           
           // Update TanStack Query cache immediately
           queryClient.setQueryData<string>(['globalLiquidity'], liquidityUSD.toString());
         }
       })
       .subscribe((status) => {
-        console.log('💧 Supabase real-time subscription status:', status);
+        // console.log('💧 Supabase real-time subscription status:', status);
       });
 
     return () => {
-      console.log('💧 Cleaning up Supabase real-time subscription');
+      // console.log('💧 Cleaning up Supabase real-time subscription');
       supabase.removeChannel(liquidityChannel);
     };
   }, [queryClient]);

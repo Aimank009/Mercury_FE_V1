@@ -46,12 +46,13 @@ export function useUserProfile() {
   const queryClient = useQueryClient();
 
   const queryEnabled = !!address && isConnected;
-  console.log('🔌 useUserProfile:', { address, isConnected, queryEnabled });
+  const isDev = process.env.NODE_ENV === 'development';
+  // if (isDev) console.log('🔌 useUserProfile:', { address, isConnected, queryEnabled });
 
   const { data: profile, isLoading, isFetched, refetch } = useQuery({
     queryKey: ['userProfile', address],
     queryFn: async (): Promise<UserProfile | null> => {
-      console.log('🚀 queryFn EXECUTING for:', address);
+      if (isDev) console.log(' queryFn EXECUTING for:', address);
       
       if (!address) return null;
 
@@ -61,7 +62,7 @@ export function useUserProfile() {
         .eq('wallet_address', address)
         .maybeSingle();
 
-      console.log('📦 Supabase result:', { data, error });
+      if (isDev) console.log('📦 Supabase result:', { data, error });
 
       if (error) {
         console.error('❌ Supabase error:', error);
@@ -69,18 +70,21 @@ export function useUserProfile() {
       }
 
       if (data) {
-        console.log('✅ Profile found:', data.username);
+        if (isDev) console.log('Profile found:', data.username);
         setCachedProfile(address, data);
         return data;
       }
       
-      console.log('⚠️ No profile found');
+      if (isDev) console.log('⚠️ No profile found');
       return null;
     },
     enabled: queryEnabled,
-    staleTime: 30_000,
-    gcTime: 5 * 60 * 1000,
+    staleTime: 60_000, // 1 minute - profile data is relatively static
+    gcTime: 10 * 60 * 1000, // 10 minutes
     retry: 1,
+    refetchOnWindowFocus: false,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
   });
 
   // Use cache as fallback
@@ -89,7 +93,9 @@ export function useUserProfile() {
   const effectiveIsLoading = !isFetched && isLoading && !cachedProfile;
 
   useEffect(() => {
-    console.log('📊 Profile state:', { hasProfile: !!effectiveProfile, isLoading: effectiveIsLoading, isFetched });
+    // if (process.env.NODE_ENV === 'development') {
+    //   console.log('📊 Profile state:', { hasProfile: !!effectiveProfile, isLoading: effectiveIsLoading, isFetched });
+    // }
   }, [effectiveProfile, effectiveIsLoading, isFetched]);
 
   // Realtime subscription

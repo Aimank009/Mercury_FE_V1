@@ -51,12 +51,12 @@ export function usePositionsWebSocket() {
 
     heartbeatIntervalRef.current = setInterval(() => {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
-        console.log('💓 Sending heartbeat...');
+        // console.log('💓 Sending heartbeat...');
         wsRef.current.send(JSON.stringify({ type: 'ping' }));
 
         // Set timeout to detect missed pong
         heartbeatTimeoutRef.current = setTimeout(() => {
-          console.warn('⚠️ Heartbeat timeout - reconnecting...');
+          // console.warn('⚠️ Heartbeat timeout - reconnecting...');
           wsRef.current?.close();
         }, HEARTBEAT_TIMEOUT);
       }
@@ -66,7 +66,7 @@ export function usePositionsWebSocket() {
   const handlePositionUpdate = useCallback((payload: PositionUpdate) => {
     if (!address) return;
 
-    console.log('🔄 Position update:', payload);
+    // console.log('🔄 Position update:', payload);
 
     // For status confirmations, just update the underlying bet data
     // The UI will pick up the changes automatically via React Query
@@ -91,13 +91,13 @@ export function usePositionsWebSocket() {
       }
     );
 
-    console.log('✅ Position status updated');
+    // console.log('✅ Position status updated');
   }, [queryClient, address]);
 
   const handleSettlement = useCallback((payload: PositionUpdate) => {
     if (!address) return;
 
-    console.log('⚡ Settlement received:', payload);
+    // console.log('⚡ Settlement received:', payload);
 
     // Update the positions cache with formatted data for instant UI update
     queryClient.setQueryData(
@@ -130,13 +130,13 @@ export function usePositionsWebSocket() {
               const payoutAmount = isWin ? amountNum * multiplier : 0;
               const payoutFormatted = `$${payoutAmount.toFixed(2)} ${multiplier.toFixed(1)}X`;
               
-              console.log('📝 Updating position:', {
-                id: position.id,
-                oldStatus: position.settlement?.status,
-                newStatus: settlementStatus,
-                oldPayout: position.payout,
-                newPayout: payoutFormatted,
-              });
+              // console.log('📝 Updating position:', {
+              //   id: position.id,
+              //   oldStatus: position.settlement?.status,
+              //   newStatus: settlementStatus,
+              //   oldPayout: position.payout,
+              //   newPayout: payoutFormatted,
+              // });
 
               return {
                 ...position,
@@ -153,9 +153,9 @@ export function usePositionsWebSocket() {
         }));
 
         if (updated) {
-          console.log('✅ Position updated in cache - UI will refresh automatically');
+          // console.log('✅ Position updated in cache - UI will refresh automatically');
         } else {
-          console.warn('⚠️ Position not found in cache:', payload.event_id);
+          // console.warn('⚠️ Position not found in cache:', payload.event_id);
         }
 
         return {
@@ -169,7 +169,7 @@ export function usePositionsWebSocket() {
   const handleNewPosition = useCallback((payload: PositionUpdate) => {
     if (!address) return;
 
-    console.log('🆕 New position:', payload);
+    // console.log('🆕 New position:', payload);
 
     // Prepend to cache
     queryClient.setQueryData(
@@ -198,7 +198,7 @@ export function usePositionsWebSocket() {
   }, [queryClient, address]);
 
   const disconnect = useCallback(() => {
-    console.log('🔌 Disconnecting WebSocket...');
+    // console.log('🔌 Disconnecting WebSocket...');
     
     clearHeartbeat();
     
@@ -218,12 +218,12 @@ export function usePositionsWebSocket() {
 
   const connect = useCallback(() => {
     if (!address) {
-      console.log('⏸️ No address - skipping WebSocket connection');
+      // console.log('⏸️ No address - skipping WebSocket connection');
       return;
     }
 
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      console.log('✅ Already connected');
+      // console.log('✅ Already connected');
       return;
     }
 
@@ -233,11 +233,11 @@ export function usePositionsWebSocket() {
     }
 
     try {
-      console.log('🔌 Connecting to WebSocket:', WS_URL);
+      // console.log('🔌 Connecting to WebSocket:', WS_URL);
       const ws = new WebSocket(WS_URL);
 
       ws.onopen = () => {
-        console.log('✅ WebSocket connected');
+        // console.log('✅ WebSocket connected');
         setIsConnected(true);
         setLastError(null);
         reconnectAttemptsRef.current = 0;
@@ -288,34 +288,34 @@ export function usePositionsWebSocket() {
               handleNewPosition(data.payload);
               break;
             case 'pong':
-              console.log('💓 Heartbeat received');
+              // console.log('💓 Heartbeat received');
               break;
             case 'subscribed':
-              console.log('✅ Subscribed to channel:', data.channel);
+              // console.log('✅ Subscribed to channel:', data.channel);
               break;
             case 'error':
-              console.error('❌ WebSocket error:', data.message);
+              // console.error('❌ WebSocket error:', data.message);
               setLastError(data.message || 'Unknown error');
               break;
             default:
-              console.log('🔔 Unknown message type:', data.type);
+              // console.log('🔔 Unknown message type:', data.type);
           }
         } catch (error) {
-          console.error('❌ Error parsing WebSocket message:', error);
+          // console.error('❌ Error parsing WebSocket message:', error);
         }
       };
 
       ws.onerror = (error) => {
-        console.error('❌ WebSocket error:', error);
+        // console.error('❌ WebSocket error:', error);
         setLastError('Connection error');
       };
 
       ws.onclose = (event) => {
-        console.log('🔌 WebSocket disconnected', {
-          code: event.code,
-          reason: event.reason,
-          wasClean: event.wasClean,
-        });
+        // console.log('🔌 WebSocket disconnected', {
+        //   code: event.code,
+        //   reason: event.reason,
+        //   wasClean: event.wasClean,
+        // });
         
         setIsConnected(false);
         wsRef.current = null;
@@ -326,22 +326,22 @@ export function usePositionsWebSocket() {
           reconnectAttemptsRef.current++;
           const delay = Math.min(RECONNECT_INTERVAL * reconnectAttemptsRef.current, 30000);
           
-          console.log(
-            `🔄 Reconnecting... (attempt ${reconnectAttemptsRef.current}/${MAX_RECONNECT_ATTEMPTS}) in ${delay}ms`
-          );
+          // console.log(
+          //   `🔄 Reconnecting... (attempt ${reconnectAttemptsRef.current}/${MAX_RECONNECT_ATTEMPTS}) in ${delay}ms`
+          // );
 
           reconnectTimeoutRef.current = setTimeout(() => {
             connect();
           }, delay);
         } else {
-          console.error('❌ Max reconnection attempts reached');
+          // console.error('❌ Max reconnection attempts reached');
           setLastError('Connection failed - please refresh');
         }
       };
 
       wsRef.current = ws;
     } catch (error) {
-      console.error('❌ Error connecting to WebSocket:', error);
+      // console.error('❌ Error connecting to WebSocket:', error);
       setLastError('Connection failed');
       setIsConnected(false);
     }

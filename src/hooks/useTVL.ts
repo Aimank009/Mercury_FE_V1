@@ -18,12 +18,18 @@ export function useTVL() {
 
       return data || 0;
     },
-    staleTime: 5000,
-    refetchInterval: 30000,
+    staleTime: 60_000, // 1 minute - TVL doesn't change that frequently
+    gcTime: 10 * 60 * 1000, // 10 minutes
+    refetchInterval: 60_000, // Refetch every minute instead of 30s
+    refetchOnWindowFocus: false,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
   });
 
-  // Realtime subscription
+  // Realtime subscription with debounced refetch
   useEffect(() => {
+    let debounceTimer: NodeJS.Timeout | null = null;
+    
     const channel = supabase
       .channel('tvl-realtime-changes')
       .on(
@@ -34,12 +40,17 @@ export function useTVL() {
           table: 'bet_placed_with_session'
         },
         () => {
-          queryClient.refetchQueries({ queryKey: ['tvl'] });
+          // Debounce: wait 2 seconds after last event before refetching
+          if (debounceTimer) clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(() => {
+            queryClient.refetchQueries({ queryKey: ['tvl'] });
+          }, 2000);
         }
       )
       .subscribe();
 
     return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
       supabase.removeChannel(channel);
     };
   }, [queryClient]);

@@ -225,7 +225,7 @@ async function fetchBetsBatch({
 
   const offset = pageParam * BATCH_SIZE;
   const normalizedAddress = userAddress.toLowerCase();
-  console.log(`🔍 Fetching batch (offset: ${offset}, limit: ${BATCH_SIZE}) for user: ${normalizedAddress}...`);
+  // console.log(`🔍 Fetching batch (offset: ${offset}, limit: ${BATCH_SIZE}) for user: ${normalizedAddress}...`);
 
   try {
     const { data, error, count } = await supabase
@@ -244,40 +244,45 @@ async function fetchBetsBatch({
       throw new Error(error.message);
     }
 
-    console.log(`📦 Query result:`, { 
-      dataLength: data?.length || 0, 
-      totalCount: count,
-      userAddress: userAddress.toLowerCase(),
-      firstBet: data?.[0] ? {
-        event_id: data[0].event_id,
-        user_address: data[0].user_address,
-        created_at: data[0].created_at,
-      } : null
-    });
+    // console.log(`📦 Query result:`, { 
+    //   dataLength: data?.length || 0, 
+    //   totalCount: count,
+    //   userAddress: userAddress.toLowerCase(),
+    //   firstBet: data?.[0] ? {
+    //     event_id: data[0].event_id,
+    //     user_address: data[0].user_address,
+    //     created_at: data[0].created_at,
+    //   } : null
+    // });
 
     if (!data || data.length === 0) {
+      // Production: Just return empty, don't do expensive debug queries
+      if (process.env.NODE_ENV === 'production') {
+        return { data: [], nextCursor: null };
+      }
+      
       console.log('⚠️ No bets found with ilike for user:', normalizedAddress);
       
-      // Check if there are ANY bets in the table (debug)
+      // Only in development: Check if there are ANY bets in the table (debug)
       const { count: totalBets } = await supabase
         .from(TABLES.BET_PLACED_WITH_SESSION)
         .select('*', { count: 'exact', head: true });
       
       
-      // Check what addresses are actually in the database
+      // Only in development: Check what addresses are actually in the database
       const { data: sampleAddresses } = await supabase
         .from(TABLES.BET_PLACED_WITH_SESSION)
         .select('user_address')
         .limit(10);
      
       
-      // Fallback: Fetch all recent bets and filter client-side by address
+      // Only in development: Fallback fetch
       console.log('🔍 Trying client-side filtering fallback...');
       const { data: allRecentBets, error: allError } = await supabase
         .from(TABLES.BET_PLACED_WITH_SESSION)
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(500);
+        .limit(100); // Reduced from 500 to 100
       
       if (allError) {
         console.error('❌ Error fetching all bets:', allError);
@@ -353,10 +358,12 @@ export function useUserBets() {
     },
     initialPageParam: 0,
     getNextPageParam: (lastPage) => lastPage.nextCursor,
-    staleTime: 10_000, // 10s stale time for faster background updates
+    staleTime: 30_000, // 30s stale time - data won't refetch for 30s
     gcTime: 10 * 60 * 1000, // 10 min cache
     placeholderData: keepPreviousData, // Keep old data visible while fetching
     refetchOnWindowFocus: false, // Don't refetch on window focus
+    refetchOnMount: false, // Don't refetch on component mount if data exists
+    refetchOnReconnect: false, // Don't refetch on reconnect
     enabled: !!address, // Only fetch when user is connected
   });
 
@@ -369,15 +376,15 @@ export function useUserBets() {
   // Debug logging
   useEffect(() => {
     if (address) {
-      console.log('useUserBets state:', {
-        address,
-        isLoading,
-        isFetching,
-        hasData: !!data,
-        pagesCount: data?.pages?.length || 0,
-        totalPositions: positions.length,
-        error: error?.message,
-      });
+      // console.log('useUserBets state:', {
+      //   address,
+      //   isLoading,
+      //   isFetching,
+      //   hasData: !!data,
+      //   pagesCount: data?.pages?.length || 0,
+      //   totalPositions: positions.length,
+      //   error: error?.message,
+      // });
     }
   }, [address, isLoading, isFetching, data, positions.length, error]);
 

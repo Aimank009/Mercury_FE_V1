@@ -6,6 +6,8 @@ import {
   optimism,
   polygon,
   sepolia,
+  bsc,
+  opBNB,
 } from 'wagmi/chains';
 import { Chain } from 'wagmi/chains';
 import { http } from 'wagmi';
@@ -46,6 +48,8 @@ export const config = getDefaultConfig({
     optimism,
     arbitrum,
     base,
+    bsc,
+    opBNB,
     ...(process.env.NEXT_PUBLIC_ENABLE_TESTNETS === 'true' ? [sepolia] : []),
   ],
   ssr: true,

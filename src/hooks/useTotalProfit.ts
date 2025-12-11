@@ -74,7 +74,7 @@ export function usePnL() {
 
         // Get the latest PnL value and convert from USDC precision (6 decimals)
         const latestPnL = (parseFloat(pnlData[0].pnl) || 0) / 1e6;
-        console.log('💰 Latest PnL:', latestPnL);
+        // console.log('💰 Latest PnL:', latestPnL);
         
         return latestPnL;
       } catch (error) {
@@ -83,8 +83,12 @@ export function usePnL() {
       }
     },
     enabled: !!address && isConnected,
-    staleTime: 30_000, // 30 seconds
-    refetchInterval: 60_000, // Refetch every minute
+    staleTime: 60_000, // 1 minute
+    gcTime: 10 * 60 * 1000, // 10 minutes
+    refetchInterval: 2 * 60_000, // Refetch every 2 minutes
+    refetchOnWindowFocus: false,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
   });
 
   useEffect(() => {
@@ -98,11 +102,12 @@ export function usePnL() {
     }
   }, [data, queryLoading, address]);
 
-  // Supabase Realtime subscription for real-time PnL updates
+  // Supabase Realtime subscription for real-time PnL updates (debounced)
   useEffect(() => {
     if (!address || !isConnected) return;
 
-    console.log('📡 Setting up realtime subscription for PnL updates');
+    let debounceTimer: NodeJS.Timeout | null = null;
+    // console.log('📡 Setting up realtime subscription for PnL updates');
 
     const pnlChannel = supabase
       .channel(`pnl_updates_${address}`)
@@ -115,19 +120,22 @@ export function usePnL() {
           filter: `user_address=eq.${address}`,
         },
         (payload) => {
-          console.log('📡 Realtime PnL update received:', payload);
-          refetch();
+          // console.log('📡 Realtime PnL update received:', payload);
+          // Debounce: wait 3 seconds after last event
+          if (debounceTimer) clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(() => {
+            refetch();
+          }, 3000);
         }
       )
-      .subscribe((status) => {
-        console.log('📡 PnL subscription status:', status);
-      });
+      .subscribe();
 
     return () => {
-      console.log('📡 Cleaning up PnL subscription');
+      if (debounceTimer) clearTimeout(debounceTimer);
+      // console.log('📡 Cleaning up PnL subscription');
       supabase.removeChannel(pnlChannel);
     };
-  }, [address, isConnected, refetch, queryClient]);
+  }, [address, isConnected, refetch]);
 
   return { pnl, isLoading: isLoading || queryLoading, error, refetch };
 }

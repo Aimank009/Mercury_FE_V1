@@ -25,7 +25,7 @@ export function useAllUsersBetsQuery({
   // Query key based on filters
   const queryKey = ['allUsersBets', currentTime, priceMin, priceMax, timeWindowSeconds];
 
-  // Main query with very short stale time for instant updates
+  // Main query with longer stale time - real-time handles updates
   const {
     data: bets = [],
     isLoading,
@@ -35,10 +35,11 @@ export function useAllUsersBetsQuery({
     queryKey,
     queryFn: () => fetchAllUsersBets(currentTime, priceMin, priceMax, timeWindowSeconds),
     enabled,
-    staleTime: 10000, // Consider data fresh for 10 seconds to prevent instant refetch on page switch
+    staleTime: 30_000, // Consider data fresh for 30 seconds - real-time handles updates
     gcTime: 5 * 60 * 1000, // Keep in cache for 5 minutes
     refetchOnWindowFocus: false,
-    refetchOnMount: true,
+    refetchOnMount: false, // Don't refetch on mount if data exists
+    refetchOnReconnect: false,
   });
 
   // Set up Supabase Realtime subscription for instant updates
@@ -92,14 +93,11 @@ export function useAllUsersBetsQuery({
               return oldBets;
             }
             
-            console.log('⚡ Optimistic update: Adding bet immediately', bet);
+            // console.log('⚡ Optimistic update: Adding bet immediately', bet);
             return [...oldBets, bet];
           });
 
-          // Refetch in background to ensure data consistency (non-blocking)
-          setTimeout(() => {
-            refetch();
-          }, 100);
+          // NOTE: Removed background refetch - real-time update is sufficient
         }
       )
       .subscribe((status) => {

@@ -70,6 +70,10 @@ export function useUserTransactions(userAddress: string | undefined) {
     queryKey: ['userTransactions', userAddress],
     queryFn: () => fetchUserTransactions(userAddress!),
     enabled: !!userAddress,
-    staleTime: 30000, // 30 seconds
+    staleTime: 60_000, // 1 minute - transactions don't change often
+    gcTime: 10 * 60 * 1000, // 10 minutes
+    refetchOnWindowFocus: false,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
   });
 }

@@ -138,17 +138,27 @@ export function useLeaderboard({
     queryKey,
     queryFn: () => fetchLeaderboard(limit),
     enabled,
-    staleTime: 0, // Always refetch (changed from 10_000)
-    gcTime: 5 * 60 * 1000, // Keep in cache for 5 minutes
-    refetchOnWindowFocus: true,
-    refetchOnMount: true,
+    staleTime: 60_000, // 1 minute - leaderboard doesn't need instant updates
+    gcTime: 10 * 60 * 1000, // Keep in cache for 10 minutes
+    refetchOnWindowFocus: false,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
   });
 
-  // Set up Supabase Realtime subscription for instant updates
+  // Set up Supabase Realtime subscription with debounced updates
   useEffect(() => {
     if (!enabled) return;
 
+    let debounceTimer: NodeJS.Timeout | null = null;
     const channelName = `leaderboard-${Math.random().toString(36).substring(7)}`;
+
+    // Debounced refetch - wait 5 seconds after last event
+    const debouncedRefetch = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        refetch();
+      }, 5000); // 5 second debounce for leaderboard
+    };
 
     const channel = supabase
       .channel(channelName)
@@ -160,11 +170,8 @@ export function useLeaderboard({
           table: 'users',
         },
         async (payload: any) => {
-          console.log('📊 Leaderboard users update detected:', payload.eventType);
-          // Refetch to ensure consistency
-          setTimeout(() => {
-            refetch();
-          }, 100);
+          // console.log('📊 Leaderboard users update detected:', payload.eventType);
+          debouncedRefetch();
         }
       )
       .on(
@@ -175,11 +182,8 @@ export function useLeaderboard({
           table: 'updated_pnl',
         },
         async (payload: any) => {
-          console.log('💰 PnL update detected:', payload.eventType);
-          // Refetch to get updated PnL values and re-sort
-          setTimeout(() => {
-            refetch();
-          }, 100);
+          // console.log('💰 PnL update detected:', payload.eventType);
+          debouncedRefetch();
         }
       )
       .subscribe((status) => {
@@ -193,12 +197,13 @@ export function useLeaderboard({
     subscriptionRef.current = channel;
 
     return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
       if (subscriptionRef.current) {
-        console.log('🔌 Unsubscribing from leaderboard realtime');
+        // console.log('🔌 Unsubscribing from leaderboard realtime');
         supabase.removeChannel(subscriptionRef.current);
       }
     };
-  }, [enabled, queryKey, queryClient, refetch, leaderboard?.length]);
+  }, [enabled, refetch]);
 
   return {
     leaderboard,

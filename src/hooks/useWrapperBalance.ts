@@ -13,7 +13,8 @@ async function fetchWrapperBalance(userAddress: string): Promise<BalanceData> {
     return { balance: 0, balanceUSD: 0 };
   }
 
-  console.log('💰 [useWrapperBalance] Fetching balance for address:', userAddress);
+  const isDev = process.env.NODE_ENV === 'development';
+  if (isDev) console.log('Fetching balance for address:', userAddress);
 
   try {
     // First try exact match with original address (mixed case as stored in DB)
@@ -24,7 +25,7 @@ async function fetchWrapperBalance(userAddress: string): Promise<BalanceData> {
       .order('timestamp', { ascending: false })
       .limit(1);
 
-    console.log('💰 [useWrapperBalance] Exact match result:', { data, error });
+    if (isDev) console.log('💰 [useWrapperBalance] Exact match result:', { data, error });
 
     // If no results, try with lowercase
     if ((!data || data.length === 0) && !error) {
@@ -37,7 +38,7 @@ async function fetchWrapperBalance(userAddress: string): Promise<BalanceData> {
       
       data = result.data;
       error = result.error;
-      console.log('💰 [useWrapperBalance] ilike lowercase result:', { data, error });
+      if (isDev) console.log('💰 [useWrapperBalance] ilike lowercase result:', { data, error });
     }
 
     // If still no results, try pattern match
@@ -58,7 +59,7 @@ async function fetchWrapperBalance(userAddress: string): Promise<BalanceData> {
         );
         if (match) {
           data = [match];
-          console.log('💰 [useWrapperBalance] Found via suffix match:', match);
+          if (isDev) console.log('💰 [useWrapperBalance] Found via suffix match:', match);
         }
       }
     }
@@ -69,18 +70,18 @@ async function fetchWrapperBalance(userAddress: string): Promise<BalanceData> {
     }
 
     if (!data || data.length === 0) {
-      console.log('💰 No balance record found for:', userAddress);
+      if (isDev) console.log('💰 No balance record found for:', userAddress);
       return { balance: 0, balanceUSD: 0 };
     }
 
     const latestRecord = data[0];
-    console.log('💰 Latest record:', latestRecord);
+    if (isDev) console.log('💰 Latest record:', latestRecord);
     
     const balanceValue = latestRecord.new_balance || latestRecord.balance || '0';
     const balanceRaw = BigInt(balanceValue);
     const balanceUSDValue = Number(balanceRaw) / 1e6;
 
-    console.log('💰 ✅ BALANCE LOADED:', {
+    if (isDev) console.log('💰 ✅ BALANCE LOADED:', {
       raw: balanceValue,
       usd: balanceUSDValue
     });
@@ -123,7 +124,8 @@ export function useWrapperBalance(userAddress: string | undefined) {
     if (!userAddress || !supabase) return;
 
     const normalizedAddress = userAddress.toLowerCase();
-    console.log('💰 Setting up Supabase real-time for final_balance...');
+    const isDev = process.env.NODE_ENV === 'development';
+    if (isDev) console.log('Setting up Supabase real-time for final_balance...');
 
     const balanceChannel = supabase
       .channel('final_balance_changes')
@@ -132,10 +134,10 @@ export function useWrapperBalance(userAddress: string | undefined) {
         schema: 'public',
         table: 'final_balance',
       }, (payload) => {
-        console.log('💰 ⚡ Balance change event:', payload);
+        if (isDev) console.log('💰 ⚡ Balance change event:', payload);
         
         if (payload.new && (payload.new as any).user_address?.toLowerCase() === normalizedAddress) {
-          console.log('💰 ⚡⚡ INSTANT BALANCE UPDATE!', payload.new);
+          if (isDev) console.log('💰 ⚡⚡ INSTANT BALANCE UPDATE!', payload.new);
           const balanceValue = (payload.new as any).new_balance || (payload.new as any).balance || '0';
           const newBalance = BigInt(balanceValue);
           const balanceUSDValue = Number(newBalance) / 1e6;
@@ -149,12 +151,10 @@ export function useWrapperBalance(userAddress: string | undefined) {
           );
         }
       })
-      .subscribe((status) => {
-        console.log('💰 final_balance subscription status:', status);
-      });
+      .subscribe();
 
     return () => {
-      console.log('💰 Cleaning up Supabase real-time subscription');
+      if (isDev) console.log('💰 Cleaning up Supabase real-time subscription');
       supabase.removeChannel(balanceChannel);
     };
   }, [userAddress, queryClient]);

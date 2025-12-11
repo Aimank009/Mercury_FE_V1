@@ -63,14 +63,14 @@ export async function fetchAllUsersBets(
       return [];
     }
 
-    console.log('📊 Raw bet data:', data?.length || 0, 'bets found', data);
+    console.log('Raw bet data:', data?.length || 0, 'bets found', data);
 
     if (!data || data.length === 0) {
-      console.log('✅ No bets found in timeframe');
+      console.log('No bets found in timeframe');
       return [];
     }
 
-    console.log('📊 Raw bet data:', data.length, 'bets found');
+    console.log('Raw bet data:', data.length, 'bets found');
 
     // Transform all bets without aggressive price filtering
     // We'll let the visual rendering decide what to show
