@@ -5,6 +5,8 @@ const nextConfig = {
   experimental: {
     scrollRestoration: true,
   },
+  // Add empty turbopack config to silence warning (Next.js 16+ uses Turbopack by default)
+  turbopack: {},
   webpack: (config, { isServer }) => {
     // Externalize packages that should not be bundled
     config.externals.push('pino-pretty', 'lokijs', 'encoding');

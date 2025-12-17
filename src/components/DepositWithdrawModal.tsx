@@ -264,6 +264,24 @@ export default function DepositWithdrawModal() {
   const { data: walletClient } = useWalletClient();
   const { switchChainAsync } = useSwitchChain();
 
+  // Handle modal close with chain switch back to HyperEVM
+  const handleCloseModal = async () => {
+    const HYPE_CHAIN_ID = 999;
+    const isRabbyWallet = typeof window !== 'undefined' && window.ethereum?.isRabby;
+    
+    setShowDepositModal(false);
+    
+    // Switch back to HyperEVM if on a different chain (skip for Rabby wallet)
+    if (!isRabbyWallet && currentChain && currentChain.id !== HYPE_CHAIN_ID) {
+      try {
+        await switchChainAsync({ chainId: HYPE_CHAIN_ID });
+        console.log('✅ Switched back to HyperEVM');
+      } catch (error) {
+        console.error('❌ Failed to switch back to HyperEVM:', error);
+      }
+    }
+  };
+
   // Fetch chains from LI.FI on mount
   useEffect(() => {
     const loadChains = async () => {
@@ -606,7 +624,7 @@ export default function DepositWithdrawModal() {
       setSuccessMessage(`✅ Successfully deposited ${amount} USDTO!`);
       setAmount('');
       setCurrentStep('idle');
-      setTimeout(() => setShowDepositModal(false), 2000);
+      setTimeout(() => handleCloseModal(), 2000);
     } catch (err: any) {
       console.error('Deposit error:', err);
       setCurrentStep('idle');
@@ -633,7 +651,7 @@ export default function DepositWithdrawModal() {
       const result = await withdraw(amount);
       setSuccessMessage(`✅ Successfully withdrew ${amount} USDTO!`);
       setAmount('');
-      setTimeout(() => setShowDepositModal(false), 2000);
+      setTimeout(() => handleCloseModal(), 2000);
     } catch (err: any) {
       console.error('Withdraw error:', err);
     } finally {
@@ -725,12 +743,12 @@ export default function DepositWithdrawModal() {
   return (
     <div
       className="fixed inset-0 bg-black/30 backdrop-blur-[12px] flex items-center justify-center z-[10002] animate-fade-in"
-      onClick={() => setShowDepositModal(false)}
+      onClick={() => handleCloseModal()}
     >
       <div className="relative overflow-visible">
         {/* Close Button */}
         <button
-          onClick={() => setShowDepositModal(false)}
+          onClick={() => handleCloseModal()}
           className="absolute -top-4 -right-4 w-8 h-8 rounded-full bg-[#000E02] hover:bg-[#2a2a2a] border border-[#162A19] flex items-center justify-center transition-all duration-200 group z-[10003]"
         >
           <svg className="w-5 h-5 text-gray-400 group-hover:text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">

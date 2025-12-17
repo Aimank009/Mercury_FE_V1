@@ -67,8 +67,18 @@ const Home: NextPage = () => {
       // HyperEVM Mainnet chain ID is 999 (0x3e7)
       const HYPE_CHAIN_ID = 999;
       
+      // Check if user is using Rabby Wallet (doesn't support programmatic chain switching)
+      const isRabbyWallet = typeof window !== 'undefined' && window.ethereum?.isRabby;
+      
       // Only switch on initial connection, not on subsequent chain changes
       if (address && chain && chain.id !== HYPE_CHAIN_ID && !hasInitialSwitched) {
+        // Skip auto-switch for Rabby Wallet since it doesn't support it
+        if (isRabbyWallet) {
+          console.log('⚠️ Rabby Wallet detected - please manually switch to HyperEVM network');
+          setHasInitialSwitched(true);
+          return;
+        }
+        
         try {
           console.log('🔄 Initial auto-switching to HyperEVM network...');
           await switchChainAsync({ chainId: HYPE_CHAIN_ID });
