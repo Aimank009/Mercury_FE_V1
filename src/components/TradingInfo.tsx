@@ -48,6 +48,7 @@ export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSe
 
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
     const savedAmount = localStorage.getItem(STORAGE_KEYS.USER_AMOUNT);
     if (savedAmount) {
       const parsedAmount = parseFloat(savedAmount);
@@ -97,7 +98,9 @@ export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSe
       return;
     }
     setAmount(numValue);
-    localStorage.setItem(STORAGE_KEYS.USER_AMOUNT, numValue.toString());
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(STORAGE_KEYS.USER_AMOUNT, numValue.toString());
+    }
     onAmountSet?.(numValue);
     window.dispatchEvent(new Event('amountUpdated'));
     setError('');
@@ -108,7 +111,9 @@ export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSe
     setAmount(amt);
     setInputValue(amt.toString());
     setError('');
-    localStorage.setItem(STORAGE_KEYS.USER_AMOUNT, amt.toString());
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(STORAGE_KEYS.USER_AMOUNT, amt.toString());
+    }
     onAmountSet?.(amt);
     window.dispatchEvent(new Event('amountUpdated'));
     setShowAmountModal(false);

@@ -52,7 +52,9 @@ export default function UserCreationModal({ isOpen, onSuccess, walletAddress, us
           console.log('✅ UserCreationModal: Existing user found, skipping modal:', existingUser.username);
           
           // Update localStorage
-          localStorage.setItem(`mercury_access_granted_${walletAddress.toLowerCase()}`, 'true');
+          if (typeof window !== 'undefined') {
+            localStorage.setItem(`mercury_access_granted_${walletAddress.toLowerCase()}`, 'true');
+          }
           
           // Trigger profile refresh so Navbar loads the profile
           triggerProfileRefresh();
@@ -110,8 +112,11 @@ export default function UserCreationModal({ isOpen, onSuccess, walletAddress, us
     setError('');
 
     // Get used referral code from props or localStorage
-    const referralCodeToUse = usedReferralCode || localStorage.getItem(`mercury_used_referral_${walletAddress.toLowerCase()}`) || null;
-    console.log('🔑 Referral code to use:', { usedReferralCode, fromLocalStorage: localStorage.getItem(`mercury_used_referral_${walletAddress.toLowerCase()}`), final: referralCodeToUse });
+    const referralCodeFromStorage = typeof window !== 'undefined' 
+      ? localStorage.getItem(`mercury_used_referral_${walletAddress.toLowerCase()}`) 
+      : null;
+    const referralCodeToUse = usedReferralCode || referralCodeFromStorage || null;
+    console.log('🔑 Referral code to use:', { usedReferralCode, fromLocalStorage: referralCodeFromStorage, final: referralCodeToUse });
 
     try {
       // Check if username is taken

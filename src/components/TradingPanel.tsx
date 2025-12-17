@@ -32,6 +32,7 @@ export default function TradingPanel({ sdk, hasSession, currentPrice = 37.25 }: 
 
   // Load amount from localStorage
   useEffect(() => {
+    if (typeof window === 'undefined') return;
     const savedAmount = localStorage.getItem(STORAGE_KEYS.USER_AMOUNT);
     if (savedAmount) {
       const parsedAmount = parseFloat(savedAmount);
@@ -43,6 +44,7 @@ export default function TradingPanel({ sdk, hasSession, currentPrice = 37.25 }: 
 
   // Listen for storage changes (when amount is set in AmountModal)
   useEffect(() => {
+    if (typeof window === 'undefined') return;
     const handleStorageChange = () => {
       const savedAmount = localStorage.getItem(STORAGE_KEYS.USER_AMOUNT);
       if (savedAmount) {
@@ -102,6 +104,10 @@ export default function TradingPanel({ sdk, hasSession, currentPrice = 37.25 }: 
     }
 
     // Check if amount is set
+    if (typeof window === 'undefined') {
+      setError('localStorage is not available');
+      return;
+    }
     const savedAmount = localStorage.getItem(STORAGE_KEYS.USER_AMOUNT);
     if (!savedAmount || parseFloat(savedAmount) === 0) {
       setError('⚠️ Please set an amount first using the Amount Modal at the top right');

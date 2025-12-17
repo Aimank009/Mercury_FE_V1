@@ -735,9 +735,10 @@ export class SessionTradingSDK {
                 nonce: nonce
             };
 
-            localStorage.setItem(STORAGE_KEYS.MERCURY_SESSION, JSON.stringify(sessionInfo));
-            
-            console.log('✅ Session saved to localStorage!');
+            if (typeof window !== 'undefined') {
+                localStorage.setItem(STORAGE_KEYS.MERCURY_SESSION, JSON.stringify(sessionInfo));
+                console.log('✅ Session saved to localStorage!');
+            }
             console.log('');
             console.log('🎉 SESSION CREATION COMPLETE!');
             console.log('');
@@ -771,6 +772,9 @@ export class SessionTradingSDK {
         try {
             // Get session info
             console.log('📍 STEP 1: Loading session...');
+            if (typeof window === 'undefined') {
+                throw new Error('localStorage is not available. Please try again.');
+            }
             const sessionData = localStorage.getItem(STORAGE_KEYS.MERCURY_SESSION);
             if (!sessionData) {
                 throw new Error('No session found. Please create a session first.');

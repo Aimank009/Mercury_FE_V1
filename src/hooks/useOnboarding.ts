@@ -53,9 +53,11 @@ export function useOnboarding() {
         // ✅ USER EXISTS - They are fully onboarded!
         // console.log('✅ Existing user found:', profile.username);
         
-        const accessKey = `mercury_access_granted_${address.toLowerCase()}`;
-        // Ensure access key is set
-        localStorage.setItem(accessKey, 'true');
+        if (typeof window !== 'undefined') {
+          const accessKey = `mercury_access_granted_${address.toLowerCase()}`;
+          // Ensure access key is set
+          localStorage.setItem(accessKey, 'true');
+        }
         
         setState(prev => ({
           ...prev,
@@ -72,6 +74,10 @@ export function useOnboarding() {
       if (isProfileLoading) {
         console.log('⏳ Profile still loading, waiting...');
         setState(prev => ({ ...prev, isLoadingProfile: true }));
+        return;
+      }
+      
+      if (typeof window === 'undefined') {
         return;
       }
       
@@ -118,12 +124,14 @@ export function useOnboarding() {
   const handleAcceptTerms = async (accessCode: string) => {
     if (!address) return;
 
-    // Store access grant in localStorage
-    const storageKey = `mercury_access_granted_${address.toLowerCase()}`;
-    localStorage.setItem(storageKey, 'true');
-    
-    // Also store the used referral code for the UserCreationModal
-    localStorage.setItem(`mercury_used_referral_${address.toLowerCase()}`, accessCode);
+    if (typeof window !== 'undefined') {
+      // Store access grant in localStorage
+      const storageKey = `mercury_access_granted_${address.toLowerCase()}`;
+      localStorage.setItem(storageKey, 'true');
+      
+      // Also store the used referral code for the UserCreationModal
+      localStorage.setItem(`mercury_used_referral_${address.toLowerCase()}`, accessCode);
+    }
 
     // Move to User Creation
     setState(prev => ({

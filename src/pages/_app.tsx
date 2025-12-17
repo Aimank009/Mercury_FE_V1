@@ -5,10 +5,19 @@ import { useEffect } from 'react';
 import { GeistSans } from 'geist/font/sans';
 import { GeistMono } from 'geist/font/mono';
 
+import dynamic from 'next/dynamic';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WagmiProvider } from 'wagmi';
-import { RainbowKitProvider } from '@rainbow-me/rainbowkit';
 import { PriceFeedProvider } from '../contexts/PriceFeedContext';
+
+// Dynamically import RainbowKitProviderWrapper to prevent SSR issues
+const RainbowKitProviderWrapper = dynamic(
+  () => import('../components/RainbowKitProviderWrapper').then((mod) => ({ default: mod.RainbowKitProviderWrapper })),
+  { 
+    ssr: false,
+    loading: () => <div style={{ minHeight: '100vh' }} /> // Prevent layout shift
+  }
+);
 import { SessionTradingProvider } from '../contexts/SessionTradingContext';
 import { DepositWithdrawProvider } from '../contexts/DepositWithdrawContext';
 import { ModalProvider } from '../contexts/ModalContext';
@@ -31,8 +40,47 @@ const client = new QueryClient({
   },
 });
 
+// Set up localStorage polyfill for SSR (before any component renders)
+// This prevents RainbowKit and other libraries from crashing during SSR
+if (typeof window === 'undefined') {
+  // Create a global localStorage polyfill for SSR
+  // Use both global and globalThis for compatibility
+  const localStoragePolyfill = {
+    getItem: () => null,
+    setItem: () => {},
+    removeItem: () => {},
+    clear: () => {},
+    key: () => null,
+    length: 0
+  };
+  
+  if (typeof global !== 'undefined') {
+    (global as any).localStorage = localStoragePolyfill;
+  }
+  if (typeof globalThis !== 'undefined') {
+    (globalThis as any).localStorage = localStoragePolyfill;
+  }
+}
+
 // Set up error handlers IMMEDIATELY (before any component renders)
+// Also ensure localStorage is safe to use
 if (typeof window !== 'undefined') {
+  // Safety check: ensure localStorage is available and has getItem method
+  if (!window.localStorage || typeof window.localStorage.getItem !== 'function') {
+    console.warn('localStorage is not available or getItem is not a function');
+    // Create a no-op localStorage if it doesn't exist
+    if (!window.localStorage) {
+      (window as any).localStorage = {
+        getItem: () => null,
+        setItem: () => {},
+        removeItem: () => {},
+        clear: () => {},
+        key: () => null,
+        length: 0
+      };
+    }
+  }
+  
   // Handle unhandled promise rejections (from Coinbase SDK analytics)
   const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
     const reason = event.reason;
@@ -155,7 +203,7 @@ function MyApp({ Component, pageProps }: AppProps) {
     <div className={`${GeistSans.variable} ${GeistMono.variable} font-sans`}>
       <WagmiProvider config={config}>
         <QueryClientProvider client={client}>
-          <RainbowKitProvider>
+          <RainbowKitProviderWrapper>
             <PriceFeedProvider>
               <SessionTradingProvider>
                 <DepositWithdrawProvider>
@@ -169,7 +217,7 @@ function MyApp({ Component, pageProps }: AppProps) {
                 </DepositWithdrawProvider>
               </SessionTradingProvider>
             </PriceFeedProvider>
-          </RainbowKitProvider>
+          </RainbowKitProviderWrapper>
         </QueryClientProvider>
       </WagmiProvider>
     </div>

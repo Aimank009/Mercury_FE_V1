@@ -52,7 +52,7 @@ export const config = getDefaultConfig({
     opBNB,
     ...(process.env.NEXT_PUBLIC_ENABLE_TESTNETS === 'true' ? [sepolia] : []),
   ],
-  ssr: true,
+  ssr: false, // Disable SSR to prevent localStorage errors
   // Reduce polling frequency to avoid rate limits
   pollingInterval: 30_000, // Poll every 30 seconds instead of default 4 seconds
 });

@@ -7,6 +7,7 @@ const PNL_CACHE_KEY = 'mercury_pnl_cache';
 
 // Get cached PnL from localStorage
 function getCachedPnL(address: string): number | null {
+  if (typeof window === 'undefined') return null;
   try {
     const cached = localStorage.getItem(`${PNL_CACHE_KEY}_${address}`);
     if (cached) {
@@ -24,6 +25,7 @@ function getCachedPnL(address: string): number | null {
 
 // Save PnL to localStorage cache
 function cachePnL(address: string, pnl: number) {
+  if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(`${PNL_CACHE_KEY}_${address}`, JSON.stringify({
       pnl,

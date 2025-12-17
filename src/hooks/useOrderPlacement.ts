@@ -110,6 +110,8 @@ function getGraphStartTime(): number | null {
  */
 
 function getStoredSession(): any | null {
+  if (typeof window === 'undefined') return null;
+  
   console.log('🔍 Looking for session in localStorage...');
   
   // First try to find any trading session in localStorage

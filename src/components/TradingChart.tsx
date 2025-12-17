@@ -594,6 +594,7 @@ export default function TradingChart({
   
   // Helper function to clear nonce storage
   const clearNonceStorage = () => {
+    if (typeof window === 'undefined') return;
     Object.keys(localStorage).forEach(key => {
       if (key.startsWith('nonce_')) {
         localStorage.removeItem(key);
@@ -604,7 +605,7 @@ export default function TradingChart({
 
   // Helper function to clear session storage
   const clearSessionStorage = () => {
-    if (!address) return;
+    if (!address || typeof window === 'undefined') return;
     
     const sessionKey = `tradingSession_${address}`;
     const sessionKeyLower = `tradingSession_${address.toLowerCase()}`;
