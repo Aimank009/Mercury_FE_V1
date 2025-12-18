@@ -19,7 +19,10 @@ export default function Navbar({ onEnableTrading }: NavbarProps) {
   const { address, isConnected } = useAccount();
   const { disconnect } = useDisconnect();
   const { sdk } = useSessionTrading();
-  const { data: balance } = useBalance({ address });
+  const { data: balance } = useBalance({ 
+    address,
+    enabled: !!address && isConnected, // Only fetch when wallet is connected
+  });
   const { balanceUSD: wrapperBalanceUSD, isLoading: isLoadingWrapper, error: balanceError } = useWrapperBalance(address);
   const { profile } = useUserProfile();
   const router = useRouter();

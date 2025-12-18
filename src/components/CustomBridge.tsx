@@ -211,7 +211,10 @@ export default function CustomBridge({
             return await walletClient.request({ method: method as any, params: params as any });
           },
         },
-        HYPEREVM_CHAIN_ID
+        {
+          name: 'hyperevm',
+          chainId: HYPEREVM_CHAIN_ID,
+        }
       );
       const hyperSigner = hyperProvider.getSigner();
 

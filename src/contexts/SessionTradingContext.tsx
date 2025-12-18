@@ -70,6 +70,15 @@ export function SessionTradingProvider({ children }: SessionTradingProviderProps
       const newChainId = parseInt(chainIdHex, 16);
       console.log(`🔄 Network changed to chain ${newChainId}`);
       
+      const HYPE_CHAIN_ID = 999;
+  
+  // ✅ Only reconnect if switching TO HyperEVM
+  // If switching AWAY from HyperEVM, skip reconnection to prevent crash
+  if (newChainId !== HYPE_CHAIN_ID) {
+    console.log(`⚠️ Switched to chain ${newChainId} (not HyperEVM). Skipping SDK reconnection.`);
+    console.log('💡 Please switch back to HyperEVM (999) to use Mercury Trade.');
+    return; // Don't try to reconnect - prevents crash
+  }
       // Reconnect SDK to update provider
       if (sdkInstance && isConnected) {
         try {
