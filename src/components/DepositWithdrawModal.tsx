@@ -246,6 +246,7 @@ export default function DepositWithdrawModal() {
   const [isFetchingBalance, setIsFetchingBalance] = useState(false);
   const [showLiFiWidget, setShowLiFiWidget] = useState(false);
   const [isSwitchingChain, setIsSwitchingChain] = useState(false);
+  const [lastFetchUsedProvider, setLastFetchUsedProvider] = useState(false);
   
   // Token selection states
   const [availableTokens, setAvailableTokens] = useState<Array<{ symbol: string; address: string; decimals: number; logo?: string; name?: string; priceUSD?: string }>>([]);
@@ -435,21 +436,61 @@ export default function DepositWithdrawModal() {
     const fetchTokenBalance = async () => {
       if (!address || !selectedToken) {
         setTokenBalance('');
+        setLastFetchUsedProvider(false);
         return;
       }
 
       setIsFetchingBalance(true);
+      
+      // Add a small delay to ensure wallet client is ready
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
       try {
+        // Get provider from wallet client if available
+        let provider: ethers.providers.Provider | undefined;
+        let usedProvider = false;
+        
+        if (walletClient && currentChain) {
+          try {
+            // Convert wagmi walletClient to ethers provider
+            const { account, chain, transport } = walletClient;
+            const network = {
+              chainId: chain.id,
+              name: chain.name,
+              ensAddress: chain.contracts?.ensRegistry?.address,
+            };
+            provider = new ethers.providers.Web3Provider(
+              {
+                request: async ({ method, params }: any) => {
+                  return await walletClient.request({ method, params } as any);
+                },
+              },
+              network
+            );
+            usedProvider = true;
+            console.log(`✅ Using wallet provider for chain ${chain.id}`);
+          } catch (err) {
+            console.warn('Failed to create provider from wallet client, will use public RPC:', err);
+          }
+        } else {
+          console.log('⚠️ Wallet client not ready, will use public RPC fallback');
+        }
+
         // Universal logic: fetch balance for selected token on selected chain
+        console.log(`🔍 Fetching balance for ${selectedToken.symbol} on chain ${selectedChain.id}...`);
         const balance = await getChainBalance(
           selectedChain.id,
           address as string,
-          selectedToken.address
+          selectedToken.address,
+          provider
         );
+        console.log(`✅ Balance fetched: ${balance} ${selectedToken.symbol}`);
         setTokenBalance(balance);
+        setLastFetchUsedProvider(usedProvider);
       } catch (error) {
         console.error('Failed to fetch token balance:', error);
         setTokenBalance('0.00');
+        setLastFetchUsedProvider(false);
       } finally {
         setIsFetchingBalance(false);
       }
@@ -459,8 +500,52 @@ export default function DepositWithdrawModal() {
       fetchTokenBalance();
     } else {
       setTokenBalance('');
+      setLastFetchUsedProvider(false);
     }
-  }, [selectedToken, selectedChain, address, activeTab]);
+  }, [selectedToken, selectedChain, address, activeTab, walletClient, currentChain]);
+
+  // Retry balance fetch when wallet client becomes available (if previous fetch didn't use it)
+  useEffect(() => {
+    if (walletClient && !lastFetchUsedProvider && selectedToken && address && activeTab === 'deposit') {
+      console.log('🔄 Wallet client now available, refetching balance...');
+      // Trigger a re-fetch by updating a dependency
+      const refetch = async () => {
+        setIsFetchingBalance(true);
+        try {
+          const { account, chain, transport } = walletClient;
+          const network = {
+            chainId: chain.id,
+            name: chain.name,
+            ensAddress: chain.contracts?.ensRegistry?.address,
+          };
+          const provider = new ethers.providers.Web3Provider(
+            {
+              request: async ({ method, params }: any) => {
+                return await walletClient.request({ method, params } as any);
+              },
+            },
+            network
+          );
+          
+          const balance = await getChainBalance(
+            selectedChain.id,
+            address as string,
+            selectedToken.address,
+            provider
+          );
+          console.log(`✅ Refetched balance with wallet provider: ${balance} ${selectedToken.symbol}`);
+          setTokenBalance(balance);
+          setLastFetchUsedProvider(true);
+        } catch (error) {
+          console.error('Failed to refetch balance:', error);
+        } finally {
+          setIsFetchingBalance(false);
+        }
+      };
+      
+      refetch();
+    }
+  }, [walletClient, lastFetchUsedProvider, selectedToken, address, activeTab, selectedChain]);
 
   // Check if user has sufficient balance when amount changes
   useEffect(() => {
