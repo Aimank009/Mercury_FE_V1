@@ -83,12 +83,12 @@ export interface BridgeExecuteCallbacks {
 }
 
 /**
- * Get a bridge quote from LiFi
+ * Get a bridge quote from LiFi with optional gas refuel
  */
-export async function getBridgeQuote(params: BridgeQuoteParams): Promise<BridgeQuoteResult> {
+export async function getBridgeQuote(params: BridgeQuoteParams & { enableRefuel?: boolean; refuelAmount?: string }): Promise<BridgeQuoteResult> {
   console.log('📊 Getting LiFi quote with params:', params);
 
-  // Use getRoutes instead of getQuote for better step information
+  // Build routes request with refuel if needed
   const routesRequest: RoutesRequest = {
     fromChainId: params.fromChainId,
     toChainId: params.toChainId,
@@ -100,6 +100,15 @@ export async function getBridgeQuote(params: BridgeQuoteParams): Promise<BridgeQ
     options: {
       slippage: 0.03, // 3% slippage
       order: 'RECOMMENDED',
+      // Enable refuel to get destination gas (HYPE) automatically
+      allowDestinationCall: true,
+      ...(params.enableRefuel && params.refuelAmount && {
+        // Request specific amount of native gas on destination
+        refuel: {
+          toChain: params.toChainId,
+          toAmount: params.refuelAmount, // Amount of native HYPE needed
+        },
+      }),
     },
   };
 
@@ -279,9 +288,9 @@ export async function executeBridgeRoute(
     });
 
     // Handle async iterator (newer SDK versions return AsyncGenerator)
-    if (routeExecution && typeof routeExecution[Symbol.asyncIterator] === 'function') {
+    if (routeExecution && typeof (routeExecution as any)[Symbol.asyncIterator] === 'function') {
       // New SDK version - iterate through updates
-      for await (const update of routeExecution) {
+      for await (const update of (routeExecution as any)) {
         executedRoute = update;
         console.log('📍 Route execution update:', update);
         
@@ -356,4 +365,127 @@ export function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.ceil(seconds / 60)}m`;
   return `${Math.ceil(seconds / 3600)}h`;
+}
+
+// ============================================
+// GAS BRIDGING FUNCTIONS (for users without HYPE)
+// ============================================
+
+const HYPEREVM_CHAIN_ID = 999;
+const HYPE_NATIVE_ADDRESS = '0x0000000000000000000000000000000000000000';
+const ETH_NATIVE_ADDRESS = '0x0000000000000000000000000000000000000000';
+const ESTIMATED_GAS_FOR_DEPOSIT = '0.002'; // ~0.002 HYPE should be enough for depositForUser tx
+const ETH_AMOUNT_FOR_GAS = '0.0003'; // ~$1 worth of ETH to bridge for gas
+
+/**
+ * Get user's HYPE balance on HyperEVM
+ */
+export async function getHypeBalance(userAddress: string): Promise<string> {
+  try {
+    const response = await fetch('https://rpc.hyperliquid.xyz/evm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'eth_getBalance',
+        params: [userAddress, 'latest'],
+        id: 1,
+      }),
+    });
+    const data = await response.json();
+    return data.result || '0x0';
+  } catch (error) {
+    console.error('Failed to get HYPE balance:', error);
+    return '0x0';
+  }
+}
+
+/**
+ * Check if user has enough HYPE for gas on HyperEVM
+ */
+export async function checkHasEnoughGas(userAddress: string): Promise<{ hasEnough: boolean; balance: string; required: string }> {
+  const balanceHex = await getHypeBalance(userAddress);
+  const balance = BigInt(balanceHex);
+  const required = BigInt(Math.floor(parseFloat(ESTIMATED_GAS_FOR_DEPOSIT) * 1e18));
+  
+  return {
+    hasEnough: balance >= required,
+    balance: (Number(balance) / 1e18).toFixed(6),
+    required: ESTIMATED_GAS_FOR_DEPOSIT,
+  };
+}
+
+/**
+ * Get a quote to bridge native ETH to HYPE for gas on HyperEVM
+ * Uses native ETH from source chain (user needs this for source chain gas anyway)
+ */
+export async function getGasBridgeQuote(params: {
+  fromChainId: number;
+  fromTokenAddress: string; // Not used - we always bridge native ETH
+  fromAddress: string;
+  gasAmount?: string; // Amount of ETH to bridge, defaults to ETH_AMOUNT_FOR_GAS
+}): Promise<BridgeQuoteResult | null> {
+  // Use native ETH on source chain - user has this for gas anyway
+  // Bridge a small amount to get HYPE for gas on HyperEVM
+  const ethAmountInWei = BigInt(Math.floor(parseFloat(params.gasAmount || ETH_AMOUNT_FOR_GAS) * 1e18)).toString();
+  
+  console.log('⛽ Getting gas bridge quote (ETH → HYPE):', {
+    fromChainId: params.fromChainId,
+    ethAmount: params.gasAmount || ETH_AMOUNT_FOR_GAS,
+    ethAmountInWei,
+  });
+
+  const routesRequest: RoutesRequest = {
+    fromChainId: params.fromChainId,
+    toChainId: HYPEREVM_CHAIN_ID,
+    fromTokenAddress: ETH_NATIVE_ADDRESS, // Native ETH on source chain
+    toTokenAddress: HYPE_NATIVE_ADDRESS, // Native HYPE on HyperEVM
+    fromAmount: ethAmountInWei,
+    fromAddress: params.fromAddress,
+    toAddress: params.fromAddress, // Send gas to user's address
+    options: {
+      slippage: 0.05, // 5% slippage for gas bridging
+      order: 'CHEAPEST',
+    },
+  };
+
+  try {
+    const routesResponse = await getRoutes(routesRequest);
+    
+    if (!routesResponse.routes || routesResponse.routes.length === 0) {
+      console.log('⚠️ No gas bridge routes available');
+      return null;
+    }
+
+    const route = routesResponse.routes[0];
+    console.log('⛽ Gas bridge route:', route);
+
+    const gasCostUSD = parseFloat(route.gasCostUSD || '0');
+    const feeCosts = route.steps?.reduce((sum, step) => {
+      const stepFees = step.estimate?.feeCosts?.reduce(
+        (feeSum, fee) => feeSum + parseFloat(fee.amountUSD || '0'),
+        0
+      ) || 0;
+      return sum + stepFees;
+    }, 0) || 0;
+
+    return {
+      route: route,
+      fromToken: route.fromToken,
+      toToken: route.toToken,
+      fromAmount: route.fromAmount,
+      toAmount: route.toAmount,
+      toAmountMin: route.toAmountMin,
+      estimatedGas: route.steps?.[0]?.estimate?.gasCosts?.[0]?.amount || '0',
+      estimatedTime: route.steps?.reduce((sum, step) => sum + (step.estimate?.executionDuration || 0), 0) || 300,
+      fees: {
+        total: (gasCostUSD + feeCosts).toFixed(2),
+        network: gasCostUSD.toFixed(2),
+        protocol: feeCosts.toFixed(2),
+      },
+    };
+  } catch (error: any) {
+    console.error('❌ Failed to get gas bridge quote:', error);
+    return null;
+  }
 }
