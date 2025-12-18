@@ -88,7 +88,23 @@ export interface BridgeExecuteCallbacks {
 export async function getBridgeQuote(params: BridgeQuoteParams & { enableRefuel?: boolean; refuelAmount?: string }): Promise<BridgeQuoteResult> {
   console.log('📊 Getting LiFi quote with params:', params);
 
-  // Build routes request with refuel if needed
+  // First try with gas fronting if requested
+  if (params.enableRefuel && params.refuelAmount) {
+    try {
+      console.log('⛽ Attempting bridge with gas fronting...');
+      return await getBridgeQuoteWithGas(params);
+    } catch (error: any) {
+      console.warn('⚠️ Gas fronting not available, trying without:', error.message);
+      // Fall through to regular bridge without gas fronting
+    }
+  }
+
+  // Regular bridge without gas fronting
+  return await getBridgeQuoteWithoutGas(params);
+}
+
+async function getBridgeQuoteWithGas(params: BridgeQuoteParams & { refuelAmount?: string }): Promise<BridgeQuoteResult> {
+  // Build routes request with gas fronting
   const routesRequest: RoutesRequest = {
     fromChainId: params.fromChainId,
     toChainId: params.toChainId,
@@ -96,64 +112,81 @@ export async function getBridgeQuote(params: BridgeQuoteParams & { enableRefuel?
     toTokenAddress: params.toTokenAddress,
     fromAmount: params.fromAmount,
     fromAddress: params.fromAddress,
-    toAddress: params.toAddress, // This is the key - send to wrapper!
+    toAddress: params.toAddress,
+    fromAmountForGas: params.refuelAmount, // Portion converted to native gas
     options: {
-      slippage: 0.03, // 3% slippage
+      slippage: 0.03,
       order: 'RECOMMENDED',
-      // Enable refuel to get destination gas (HYPE) automatically
       allowDestinationCall: true,
-      ...(params.enableRefuel && params.refuelAmount && {
-        // Request specific amount of native gas on destination
-        refuel: {
-          toChain: params.toChainId,
-          toAmount: params.refuelAmount, // Amount of native HYPE needed
-        },
-      }),
     },
   };
 
-  try {
-    const routesResponse = await getRoutes(routesRequest);
-    console.log('✅ Got LiFi routes:', routesResponse);
-
-    if (!routesResponse.routes || routesResponse.routes.length === 0) {
-      throw new Error('No routes available for this bridge');
-    }
-
-    // Use the first (recommended) route
-    const route = routesResponse.routes[0];
-    console.log('📍 Selected route:', route);
-    console.log('📍 Route steps:', route.steps);
-
-    // Calculate fees from the route
-    const gasCostUSD = parseFloat(route.gasCostUSD || '0');
-    const feeCosts = route.steps?.reduce((sum, step) => {
-      const stepFees = step.estimate?.feeCosts?.reduce(
-        (feeSum, fee) => feeSum + parseFloat(fee.amountUSD || '0'),
-        0
-      ) || 0;
-      return sum + stepFees;
-    }, 0) || 0;
-
-    return {
-      route: route,
-      fromToken: route.fromToken,
-      toToken: route.toToken,
-      fromAmount: route.fromAmount,
-      toAmount: route.toAmount,
-      toAmountMin: route.toAmountMin,
-      estimatedGas: route.steps?.[0]?.estimate?.gasCosts?.[0]?.amount || '0',
-      estimatedTime: route.steps?.reduce((sum, step) => sum + (step.estimate?.executionDuration || 0), 0) || 300,
-      fees: {
-        total: (gasCostUSD + feeCosts).toFixed(2),
-        network: gasCostUSD.toFixed(2),
-        protocol: feeCosts.toFixed(2),
-      },
-    };
-  } catch (error: any) {
-    console.error('❌ Failed to get LiFi quote:', error);
-    throw new Error(error?.message || 'Failed to get bridge quote');
+  const routesResponse = await getRoutes(routesRequest);
+  
+  if (!routesResponse.routes || routesResponse.routes.length === 0) {
+    throw new Error('No routes with gas fronting available');
   }
+
+  return processRouteResponse(routesResponse, params);
+}
+
+async function getBridgeQuoteWithoutGas(params: BridgeQuoteParams): Promise<BridgeQuoteResult> {
+  // Build routes request WITHOUT gas fronting
+  const routesRequest: RoutesRequest = {
+    fromChainId: params.fromChainId,
+    toChainId: params.toChainId,
+    fromTokenAddress: params.fromTokenAddress,
+    toTokenAddress: params.toTokenAddress,
+    fromAmount: params.fromAmount,
+    fromAddress: params.fromAddress,
+    toAddress: params.toAddress,
+    options: {
+      slippage: 0.03,
+      order: 'RECOMMENDED',
+    },
+  };
+
+  const routesResponse = await getRoutes(routesRequest);
+  
+  if (!routesResponse.routes || routesResponse.routes.length === 0) {
+    throw new Error('No routes available for this bridge');
+  }
+
+  return processRouteResponse(routesResponse, params);
+}
+
+function processRouteResponse(routesResponse: any, params: BridgeQuoteParams): BridgeQuoteResult {
+  console.log('✅ Got LiFi routes:', routesResponse);
+
+  const route = routesResponse.routes[0];
+  console.log('📍 Selected route:', route);
+  console.log('📍 Route steps:', route.steps);
+
+  // Calculate fees from the route
+  const gasCostUSD = parseFloat(route.gasCostUSD || '0');
+  const feeCosts = route.steps?.reduce((sum: number, step: any) => {
+    const stepFees = step.estimate?.feeCosts?.reduce(
+      (feeSum: number, fee: any) => feeSum + parseFloat(fee.amountUSD || '0'),
+      0
+    ) || 0;
+    return sum + stepFees;
+  }, 0) || 0;
+
+  return {
+    route: route,
+    fromToken: route.fromToken,
+    toToken: route.toToken,
+    fromAmount: route.fromAmount,
+    toAmount: route.toAmount,
+    toAmountMin: route.toAmountMin,
+    estimatedGas: route.steps?.[0]?.estimate?.gasCosts?.[0]?.amount || '0',
+    estimatedTime: route.steps?.reduce((sum: number, step: any) => sum + (step.estimate?.executionDuration || 0), 0) || 300,
+    fees: {
+      total: (gasCostUSD + feeCosts).toFixed(2),
+      network: gasCostUSD.toFixed(2),
+      protocol: feeCosts.toFixed(2),
+    },
+  };
 }
 
 /**

@@ -225,7 +225,7 @@ async function fetchBetsBatch({
 
   const offset = pageParam * BATCH_SIZE;
   const normalizedAddress = userAddress.toLowerCase();
-  // console.log(`🔍 Fetching batch (offset: ${offset}, limit: ${BATCH_SIZE}) for user: ${normalizedAddress}...`);
+  console.log(`🔍 fetchBetsBatch: Fetching for address ${normalizedAddress} (offset: ${offset}, limit: ${BATCH_SIZE})`);
 
   try {
     const { data, error, count } = await supabase
@@ -244,16 +244,11 @@ async function fetchBetsBatch({
       throw new Error(error.message);
     }
 
-    // console.log(`📦 Query result:`, { 
-    //   dataLength: data?.length || 0, 
-    //   totalCount: count,
-    //   userAddress: userAddress.toLowerCase(),
-    //   firstBet: data?.[0] ? {
-    //     event_id: data[0].event_id,
-    //     user_address: data[0].user_address,
-    //     created_at: data[0].created_at,
-    //   } : null
-    // });
+    console.log(`📦 fetchBetsBatch result:`, { 
+      foundBets: data?.length || 0, 
+      totalCount: count,
+      userAddress: normalizedAddress,
+    });
 
     if (!data || data.length === 0) {
       // Production: Just return empty, don't do expensive debug queries
@@ -341,6 +336,13 @@ export function useUserBets() {
     [address]
   );
 
+  // Debug: Log the address being used for query
+  useEffect(() => {
+    if (address) {
+      console.log('🔍 useUserBets: Querying for address:', address);
+    }
+  }, [address]);
+
   const {
     data,
     fetchNextPage,
@@ -353,7 +355,7 @@ export function useUserBets() {
   } = useInfiniteQuery({
     queryKey,
     queryFn: ({ pageParam }) => {
-      
+      console.log('📊 useUserBets: Fetching positions for', address);
       return fetchBetsBatch({ pageParam, userAddress: address });
     },
     initialPageParam: 0,

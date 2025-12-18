@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 // @ts-ignore - createPortal is available in react-dom
 import { createPortal } from 'react-dom';
+import { useAccount, useSwitchChain } from 'wagmi';
 import { usePriceFeed } from '../contexts/PriceFeedContext';
 import { useGlobalLiquidity } from '../hooks/useGlobalLiquidity';
 import { useTVL } from '../hooks/useTVL';
@@ -14,10 +15,15 @@ interface TradingInfoProps {
   onAmountSet?: (amount: number) => void;
 }
 
+const HYPE_CHAIN_ID = 999;
+
 export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSet }: TradingInfoProps) {
   const { currentPrice, isConnected } = usePriceFeed();
   const { liquidityPool, isLoading } = useGlobalLiquidity();
   const { data: tvl, isLoading: tvlLoading } = useTVL();
+  const { chain } = useAccount();
+  const { switchChainAsync } = useSwitchChain();
+  const [isSwitching, setIsSwitching] = useState(false);
   const [amount, setAmount] = useState<number>(1.0);
   const [inputValue, setInputValue] = useState<string>('1.0');
   const [showTradingPairDropdown, setShowTradingPairDropdown] = useState(false);
@@ -121,6 +127,21 @@ export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSe
 
   const quickAmounts = [0.2, 0.5, 0.5, 1.5 , 2 ,5 ];
 
+  const handleNetworkSwitch = async () => {
+    if (!chain || chain.id === HYPE_CHAIN_ID || isSwitching) return;
+    
+    setIsSwitching(true);
+    try {
+      await switchChainAsync({ chainId: HYPE_CHAIN_ID });
+    } catch (error) {
+      console.log('Network switch cancelled or failed');
+    } finally {
+      setIsSwitching(false);
+    }
+  };
+
+  const isOnHyperEVM = chain?.id === HYPE_CHAIN_ID;
+
   // Format the liquidity value with proper decimals and commas
   const formatLiquidity = (value: string) => {
     const num = parseFloat(value);
@@ -212,6 +233,60 @@ export default function TradingInfo({ isScrolled = false, onRecenter, onAmountSe
           </div>
         </div>
       </div>
+
+      {/* Network Switcher Button - Centered */}
+      {isConnected && (
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
+          <button
+            onClick={handleNetworkSwitch}
+            disabled={isOnHyperEVM || isSwitching}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px',
+              padding: 'clamp(6px, 1%, 8px)',
+              background: isOnHyperEVM ? 'transparent' : '#091c0d',
+              border: isOnHyperEVM ? '1px solid #00FF241F' : '1px solid #00FF241F',
+              fontFamily: "'Geist', sans-serif",
+              fontSize: 'clamp(10px, 1vw, 12px)',
+              fontWeight: 300,
+              color: isOnHyperEVM ? '#4a4a4a' : '#ffffff',
+              cursor: isOnHyperEVM ? 'not-allowed' : 'pointer',
+              transition: 'all 0.2s ease',
+              opacity: isOnHyperEVM ? 0.5 : 1,
+              borderRadius: '8px',
+              whiteSpace: 'nowrap',
+            }}
+            onMouseEnter={(e) => {
+              if (!isOnHyperEVM && !isSwitching) {
+                e.currentTarget.style.background = 'white';
+                e.currentTarget.style.color = '#141414';
+                e.currentTarget.style.transform = 'translateY(-1px)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (!isOnHyperEVM && !isSwitching) {
+                e.currentTarget.style.background = '#141414';
+                e.currentTarget.style.color = '#ffffff';
+                e.currentTarget.style.transform = 'translateY(0)';
+              }
+            }}
+            onMouseDown={(e) => {
+              if (!isOnHyperEVM && !isSwitching) {
+                e.currentTarget.style.transform = 'translateY(0)';
+              }
+            }}
+          >
+            {!isOnHyperEVM && (
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M5.25009 9.43241L2.81759 6.99991L1.98926 7.82241L5.25009 11.0832L12.2501 4.08324L11.4276 3.26074L5.25009 9.43241Z" fill="#00FF24"/>
+              </svg>
+            )}
+            {isOnHyperEVM ? 'On HyperEVM' : isSwitching ? 'Switching...' : 'Switch to HyperEVM'}
+          </button>
+        </div>
+      )}
      
       <div className="flex items-center gap-0.5 sm:gap-1 border-l-2 border-[#162D19] h-full min-w-0 flex-shrink">
         {/* Amount Display */}

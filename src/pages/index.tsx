@@ -15,6 +15,8 @@ import { useModal } from '../contexts/ModalContext';
 import { PRICE_STEP, PRICE_DECIMALS } from '../config';
 import styles from '../styles/Home.module.css';
 
+const HYPE_CHAIN_ID = 999;
+
 const Home: NextPage = () => {
   const { isConnected, address, chain } = useAccount();
   const { switchChainAsync } = useSwitchChain();
@@ -23,7 +25,10 @@ const Home: NextPage = () => {
   const [recenterTrigger, setRecenterTrigger] = useState(0);
   const [showSessionPrompt, setShowSessionPrompt] = useState(false);
   const [showTradingEnabledPopup, setShowTradingEnabledPopup] = useState(false);
-  const [hasInitialSwitched, setHasInitialSwitched] = useState(false);
+  const [isMounted, setIsMounted] = useState(false);
+  const [userHasInteracted, setUserHasInteracted] = useState(false);
+  const [showWrongNetworkBanner, setShowWrongNetworkBanner] = useState(false);
+  const [showWrongNetworkPopup, setShowWrongNetworkPopup] = useState(false);
   
   const {
     canAccessApp,
@@ -40,6 +45,11 @@ const Home: NextPage = () => {
   } = useOnboarding();
   
   const { placeOrderFromCell, isPlacingOrder, lastOrderResult, clearLastResult } = useOrderPlacement();
+
+  // Track mounted state to prevent hydration mismatches
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   // Auto-dismiss session prompt after 3 seconds
   useEffect(() => {
@@ -61,46 +71,73 @@ const Home: NextPage = () => {
     }
   }, [showTradingEnabledPopup]);
 
-  // Auto-switch to HyperEVM ONLY on initial wallet connection
+  // Auto-dismiss wrong network popup after 3 seconds
   useEffect(() => {
-    const switchToHype = async () => {
-      // HyperEVM Mainnet chain ID is 999 (0x3e7)
-      const HYPE_CHAIN_ID = 999;
-      
-      // Check if user is using Rabby Wallet (doesn't support programmatic chain switching)
-      const isRabbyWallet = typeof window !== 'undefined' && window.ethereum?.isRabby;
-      
-      // Only switch on initial connection, not on subsequent chain changes
-      if (address && chain && chain.id !== HYPE_CHAIN_ID && !hasInitialSwitched) {
-        // Skip auto-switch for Rabby Wallet since it doesn't support it
-        if (isRabbyWallet) {
-          console.log('⚠️ Rabby Wallet detected - please manually switch to HyperEVM network');
-          setHasInitialSwitched(true);
-          return;
-        }
-        
-        try {
-          console.log('🔄 Initial auto-switching to HyperEVM network...');
-          await switchChainAsync({ chainId: HYPE_CHAIN_ID });
-          console.log('✅ Successfully switched to HyperEVM');
-          setHasInitialSwitched(true);
-        } catch (error) {
-          console.error('❌ Failed to switch network:', error);
-          // Don't block the user, just mark as attempted
-          setHasInitialSwitched(true);
-          console.log('⚠️ User can manually switch to HyperEVM if needed');
-        }
-      } else if (address && chain && chain.id === HYPE_CHAIN_ID && !hasInitialSwitched) {
-        console.log('✅ Already on HyperEVM network');
-        setHasInitialSwitched(true);
+    if (showWrongNetworkPopup) {
+      const timer = setTimeout(() => {
+        setShowWrongNetworkPopup(false);
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [showWrongNetworkPopup]);
+
+  // Listen for wrong network popup event from Navbar
+  useEffect(() => {
+    const handleShowWrongNetworkPopup = () => {
+      console.log('📢 Received showWrongNetworkPopup event');
+      setShowWrongNetworkPopup(true);
+    };
+
+    window.addEventListener('showWrongNetworkPopup', handleShowWrongNetworkPopup);
+    
+    return () => {
+      window.removeEventListener('showWrongNetworkPopup', handleShowWrongNetworkPopup);
+    };
+  }, []);
+
+  // Check if user is on wrong network (but don't force switch on page load)
+  useEffect(() => {
+    if (isConnected && chain && chain.id !== HYPE_CHAIN_ID) {
+      setShowWrongNetworkBanner(true);
+    } else {
+      setShowWrongNetworkBanner(false);
+    }
+  }, [isConnected, chain]);
+
+  // Detect any user interaction
+  useEffect(() => {
+    const handleInteraction = () => {
+      if (!userHasInteracted && isConnected && chain && chain.id !== HYPE_CHAIN_ID) {
+        setUserHasInteracted(true);
+        // Trigger MetaMask popup to switch network
+        switchToHypeOnInteraction();
       }
     };
+
+    // Listen for scroll, click, or any movement
+    window.addEventListener('scroll', handleInteraction);
+    window.addEventListener('click', handleInteraction);
+    window.addEventListener('mousemove', handleInteraction);
     
-    // Only try to switch if wallet is connected and we haven't done initial switch
-    if (address && !hasInitialSwitched) {
-      switchToHype();
+    return () => {
+      window.removeEventListener('scroll', handleInteraction);
+      window.removeEventListener('click', handleInteraction);
+      window.removeEventListener('mousemove', handleInteraction);
+    };
+  }, [userHasInteracted, isConnected, chain]);
+
+  const switchToHypeOnInteraction = async () => {
+    try {
+      console.log('🔄 Requesting network switch to HyperEVM...');
+      await switchChainAsync({ chainId: HYPE_CHAIN_ID });
+      console.log('✅ Successfully switched to HyperEVM');
+      setShowWrongNetworkBanner(false);
+    } catch (error: any) {
+      // MetaMask will show its own popup, so we just log this
+      console.log('⚠️ User will be prompted to switch network via wallet');
+      // Keep the banner visible since they're still on wrong network
     }
-  }, [address, chain, switchChainAsync, hasInitialSwitched]);
+  };
 
   return (
     <div className={styles.container}>
@@ -112,7 +149,7 @@ const Home: NextPage = () => {
         />
         <link href="/favicon.ico" rel="icon" />
       </Head>
-      
+
       {/* Order Result Notification */}
       {lastOrderResult &&  !lastOrderResult.success &&  (
          <OrderNotification
@@ -158,11 +195,22 @@ const Home: NextPage = () => {
                   onScrollStateChange={setIsScrolled}
                   recenterTrigger={recenterTrigger}
                   onCellSelect={async (timeOffset, priceLevel) => {
-                    // if (isPlacingOrder) {
-                    //   console.log('Order already in progress, please wait...');
-                    //   return { success: false, error: 'Order already in progress' };
-                    // }
-                    
+                    // Check if on wrong network first
+                    if (chain && chain.id !== HYPE_CHAIN_ID) {
+                      console.log('⚠️ Wrong network - showing popup');
+                      setShowWrongNetworkPopup(true);
+                      
+                      // Deselect the cell
+                      window.dispatchEvent(new CustomEvent('deselectCell', {
+                        detail: { timeOffset, priceLevel }
+                      }));
+                      
+                      return { 
+                        success: false, 
+                        error: 'Please switch to HyperEVM network' 
+                      };
+                    }
+
                     try {
                       console.log('🎯 Placing order for cell:', { timeOffset, priceLevel });
                       const result = await placeOrderFromCell(timeOffset, priceLevel, 1); // $1 default amount
@@ -204,7 +252,7 @@ const Home: NextPage = () => {
       </div>
 
       {/* Show a placeholder message if user is connected but hasn't completed onboarding */}
-      {isConnected && !canAccessApp && !showTermsModal && !showUserCreationModal && !isLoadingProfile && (
+      {isMounted && isConnected && !canAccessApp && !showTermsModal && !showUserCreationModal && !isLoadingProfile && (
         <div className={styles.tradingSection}>
           <div className={styles.placeholderMessage}>
             <h2>Welcome to Mercury Trade</h2>
@@ -214,7 +262,7 @@ const Home: NextPage = () => {
       )}
 
       {/* Show loading state while checking profile */}
-      {isConnected && isLoadingProfile && (
+      {isMounted && isConnected && isLoadingProfile && (
         <div className={styles.tradingSection}>
           <div className={styles.placeholderMessage}>
             <p>Loading...</p>
@@ -383,6 +431,86 @@ const Home: NextPage = () => {
               }}
             >
               Trading Enabled
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Wrong Network Popup */}
+      {showWrongNetworkPopup && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '5%',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 1001,
+            animation: 'slideDown 0.3s ease-out',
+          }}
+        >
+          <div
+            style={{
+              position: 'relative',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',                
+              padding: '12px 12px',    
+              borderRadius: '24px',        
+              background: '#000',      
+              overflow: 'hidden',
+              boxShadow:
+                '0 4px 7.1px rgba(0,0,0,0.25), inset 0 0 0 1px rgba(255,218,0,0.30)',
+            }}
+          >
+            {/* Top thin yellow sheen */}
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                borderRadius: 'inherit',
+                pointerEvents: 'none',
+                background:
+                  'linear-gradient(180deg,rgba(0,0,0,0) 55%,  rgba(255,218,0,0.20) 22%,rgba(255,218,0,0.55) 0%, )',
+              }}
+            />
+
+            {/* Soft center highlight band with yellow */}
+            <div
+              style={{
+                position: 'absolute',
+                left: 6,
+                right: 6,
+                top: '42%',
+                height: '36%',
+                borderRadius: 999,
+                pointerEvents: 'none',
+                background:
+                  'radial-gradient(100% 220% at 50% 50%, rgba(255,218,0,0.28) 0%, rgba(255,218,0,0.18) 35%, rgba(255,218,0,0) 70%)',
+                filter: 'blur(4px)',
+                opacity: 0.9,
+              }}
+            />
+
+            {/* Warning icon */}
+            <svg width="15" height="13" viewBox="0 0 15 13" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M7.5 0.5L0.5 12.5H14.5L7.5 0.5Z" stroke="#FFDA00" strokeLinejoin="round"/>
+              <path d="M7.5 10.1668V10.5002M7.5 4.8335L7.50267 8.16683" stroke="#FFDA00" strokeLinecap="round"/>
+            </svg>
+
+            <span
+              style={{
+                position: 'relative',
+                zIndex: 1,
+                color: '#fff',
+                fontSize: 14,
+                fontWeight: 300,
+                fontFamily: 'Geist',
+                lineHeight: 1,
+                textTransform: 'lowercase',
+                transform: 'translateY(-0.5px)',
+              }}
+            >
+              Switch to HyperEVM
             </span>
           </div>
         </div>

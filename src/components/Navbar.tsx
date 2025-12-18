@@ -10,13 +10,15 @@ import { useWrapperBalance } from '../hooks/useWrapperBalance';
 import { useUserProfile } from '../hooks/useUserProfile';
 import { useModal } from '../contexts/ModalContext';
 
+const HYPE_CHAIN_ID = 999;
+
 interface NavbarProps {
   onEnableTrading?: () => Promise<boolean>;
 }
 
 export default function Navbar({ onEnableTrading }: NavbarProps) {
   const { setShowDepositModal } = useModal();
-  const { address, isConnected } = useAccount();
+  const { address, isConnected, chain } = useAccount();
   const { disconnect } = useDisconnect();
   const { sdk } = useSessionTrading();
   const { data: balance } = useBalance({ 
@@ -125,30 +127,20 @@ export default function Navbar({ onEnableTrading }: NavbarProps) {
   const handleEnableTrading = async () => {
     if (!sdk) return;
 
+    // Check if on wrong network first
+    if (chain && chain.id !== HYPE_CHAIN_ID) {
+      console.log('⚠️ Wrong network - triggering popup');
+      // Dispatch custom event to show popup
+      window.dispatchEvent(new CustomEvent('showWrongNetworkPopup'));
+      return;
+    }
+
     setIsCreatingSession(true);
     try {
       if (onEnableTrading) {
         const success = await onEnableTrading();
         if (success) setHasActiveSession(true);
         return;
-      }
-
-      const isCorrectNetwork = await sdk.isOnCorrectNetwork();
-      if (!isCorrectNetwork) {
-        const switched = await sdk.switchToCorrectNetwork();
-        if (!switched) {
-          alert(
-            'HyperEVM network not found in MetaMask!\n\n' +
-              'Please add it manually:\n' +
-              '1. Open MetaMask → Settings → Networks → Add Network\n' +
-              '2. Network Name: HyperEVM\n' +
-              '3. Chain ID: 999\n' +
-              '4. RPC URL: (your HyperEVM RPC endpoint)\n' +
-              '5. Currency Symbol: ETH\n\n' +
-              'Then try again.'
-          );
-          return;
-        }
       }
 
       await sdk.createSession();

@@ -15,6 +15,7 @@ import {
   formatTokenAmount,
   formatDuration,
   checkHasEnoughGas,
+  getGasBridgeQuote,
   BridgeQuoteResult,
 } from '../lib/LiFiBridgeService';
 import { CONTRACTS } from '../config/contracts';
@@ -32,16 +33,23 @@ interface CustomBridgeProps {
   mode?: 'bridge' | 'swap'; // New prop to determine mode
 }
 
-type BridgeStep = 'idle' | 'quoting' | 'reviewing' | 'executing' | 'waiting' | 'depositing' | 'complete' | 'error';
+type BridgeStep = 'idle' | 'quoting' | 'reviewing' | 'gas-bridging' | 'executing' | 'waiting' | 'depositing' | 'complete' | 'error';
 
 // Wrapper contract and USDTO on HyperEVM
 const WRAPPER_CONTRACT = CONTRACTS.WRAPPER;
 const USDTO_ADDRESS = '0xB8CE59FC3717ada4C02eaDF9682A9e934F625ebb';
 const HYPEREVM_CHAIN_ID = 999;
 
-// ABI for depositForUser
+// ABI for depositForUser and USDTO
 const WRAPPER_ABI = [
   'function depositForUser(uint256 _amount, address _user) external'
+];
+
+const ERC20_ABI = [
+  'function approve(address spender, uint256 amount) external returns (bool)',
+  'function transfer(address to, uint256 amount) external returns (bool)',
+  'function allowance(address owner, address spender) external view returns (uint256)',
+  'function balanceOf(address account) external view returns (uint256)'
 ];
 
 export default function CustomBridge({
@@ -65,7 +73,7 @@ export default function CustomBridge({
   const [quote, setQuote] = useState<BridgeQuoteResult | null>(null);
   const [gasQuote, setGasQuote] = useState<BridgeQuoteResult | null>(null);
   const [needsGas, setNeedsGas] = useState<boolean>(false);
-  const [refuelAmount, setRefuelAmount] = useState<string>('0.002'); // Amount of HYPE gas
+  const [refuelAmount, setRefuelAmount] = useState<string>('0.01'); // Amount of HYPE gas (increased from 0.002)
   const [error, setError] = useState<string>('');
   const [txHash, setTxHash] = useState<string>('');
   const [statusMessage, setStatusMessage] = useState<string>('');
@@ -81,7 +89,7 @@ export default function CustomBridge({
       setQuote(null);
       setGasQuote(null);
       setNeedsGas(false);
-      setRefuelAmount('0.002');
+      setRefuelAmount('0.01');
       setError('');
       setTxHash('');
       setStatusMessage('');
@@ -115,12 +123,28 @@ export default function CustomBridge({
         console.log('⛽ Gas check result:', gasCheck);
         userNeedsGas = !gasCheck.hasEnough;
         setNeedsGas(userNeedsGas);
+        
+        // If user needs gas, get a separate gas bridge quote first
+        if (userNeedsGas) {
+          console.log('⛽ User needs gas, getting gas bridge quote...');
+          const gasBridgeQuote = await getGasBridgeQuote({
+            fromChainId,
+            fromTokenAddress, // Not used, always bridges native ETH
+            fromAddress: address,
+            gasAmount: '0.0005', // ~$1.5 worth of ETH for gas
+          });
+          
+          if (gasBridgeQuote) {
+            setGasQuote(gasBridgeQuote);
+            console.log('⛽ Gas bridge quote:', gasBridgeQuote);
+          } else {
+            console.warn('⚠️ No gas bridge route available');
+          }
+        }
       }
 
-      // IMPORTANT: Always send USDT0 to wrapper contract
-      // When refuel is enabled, LiFi automatically sends HYPE gas to user's wallet (fromAddress)
-      // This way: USDT0 → Wrapper, HYPE gas → User's wallet
-      console.log(`📍 Bridge: USDT0 → Wrapper | ${userNeedsGas ? 'HYPE gas → User wallet (refuel)' : 'User has gas'}`);
+      // Main bridge quote - always to user's wallet
+      console.log(`📍 Bridge: USDTO → User wallet`);
 
       const quoteParams = {
         fromChainId,
@@ -129,9 +153,7 @@ export default function CustomBridge({
         toTokenAddress: USDTO_ADDRESS,
         fromAmount: amountInWei,
         fromAddress: address,
-        toAddress: WRAPPER_CONTRACT, // ALWAYS send to wrapper!
-        enableRefuel: userNeedsGas, // Refuel sends HYPE gas to fromAddress (user's wallet)
-        refuelAmount: userNeedsGas ? '2000000000000000' : undefined, // 0.002 HYPE in wei
+        toAddress: address, // ✅ Send USDTO to USER's wallet!
       };
 
       // Use swap quote for same-chain, bridge quote for cross-chain
@@ -154,10 +176,41 @@ export default function CustomBridge({
     setError('');
 
     try {
-      // Single bridge transaction - if user needs gas, it goes to their address with refuel
-      // If user has gas, it goes directly to wrapper
+      // STEP 1: Bridge gas if needed (SIGNATURE 1)
+      if (needsGas && gasQuote) {
+        setStep('gas-bridging');
+        setStatusMessage('Step 1/4: Bridging ETH for gas...');
+        console.log('⛽ Executing gas bridge...');
+        
+        const gasExecutedRoute = await executeBridgeRoute(gasQuote.route, walletClient, {
+          onTransactionSent: (hash) => {
+            console.log('Gas bridge TX sent:', hash);
+            setStatusMessage('Gas bridge submitted, waiting for confirmation...');
+          },
+          onError: (err) => {
+            throw err;
+          },
+        });
+        
+        console.log('⛽ Gas bridge completed:', gasExecutedRoute);
+        setStatusMessage('Gas bridge complete! Waiting for HYPE to arrive...');
+        
+        // Wait for gas to arrive on HyperEVM (cross-chain takes time)
+        await new Promise(resolve => setTimeout(resolve, 15000)); // 15 seconds
+        
+        // Verify gas arrived
+        const gasCheck = await checkHasEnoughGas(address);
+        if (!gasCheck.hasEnough) {
+          console.warn('⚠️ Gas may not have arrived yet, but continuing...');
+        } else {
+          console.log('✅ Gas confirmed on HyperEVM:', gasCheck.balance, 'HYPE');
+        }
+      }
+      
+      // STEP 2: Execute main bridge (SIGNATURE 2 or SIGNATURE 1 if no gas bridge)
+      const stepNumber = needsGas && gasQuote ? '2/4' : '1/3';
       setStep('executing');
-      setStatusMessage('Please confirm the transaction in your wallet...');
+      setStatusMessage(`Step ${stepNumber}: Please confirm ${actionLabel.toLowerCase()} transaction...`);
 
       // Execute the bridge route - pass walletClient directly (LiFi SDK v3 uses viem)
       const executedRoute = await executeBridgeRoute(quote.route, walletClient, {
@@ -178,9 +231,9 @@ export default function CustomBridge({
       console.log('Route executed:', executedRoute);
       
       if (isSwap) {
-        // For swaps, we can proceed directly to deposit since it's same-chain
+        // For swaps, we can proceed directly to approve since it's same-chain
         setStep('depositing');
-        setStatusMessage('Swap complete! Crediting your account...');
+        setStatusMessage('Swap complete! Approving & depositing...');
       } else {
         // For bridges, wait for cross-chain transfer
         setStep('waiting');
@@ -188,7 +241,7 @@ export default function CustomBridge({
         // Wait a bit for the bridge to complete (cross-chain takes time)
         await new Promise(resolve => setTimeout(resolve, 5000));
         setStep('depositing');
-        setStatusMessage('Tokens received! Crediting your account...');
+        setStatusMessage('Tokens received! Approving & depositing...');
       }
 
       // Switch to HyperEVM if not already there
@@ -227,14 +280,48 @@ export default function CustomBridge({
         bridgedAmount = executedRoute.toAmount;
       }
 
-      // IMPORTANT: Tokens already went to wrapper contract directly!
-      // If user needed gas, they received HYPE via refuel automatically
-      // Now we just need to call depositForUser to credit their account
+      console.log('📦 Bridged amount:', bridgedAmount, 'USDTO');
+
+      // ✅ STEP 3 (or STEP 2): Approve wrapper to spend USDTO
+      const approveStepNumber = needsGas && gasQuote ? '3/4' : '2/3';
+      setStatusMessage(`Step ${approveStepNumber}: Approving USDTO...`);
+      
+      const usdtoContract = new ethers.Contract(USDTO_ADDRESS, ERC20_ABI, hyperSigner);
+      
+      // Check current allowance
+      const currentAllowance = await usdtoContract.allowance(address, WRAPPER_CONTRACT);
+      console.log('Current allowance:', currentAllowance.toString());
+      
+      if (currentAllowance.lt(bridgedAmount)) {
+        console.log('Approving wrapper to spend USDTO...');
+        const approveTx = await usdtoContract.approve(WRAPPER_CONTRACT, bridgedAmount);
+        console.log('Approve tx:', approveTx.hash);
+        
+        setStatusMessage('Confirming approval...');
+        await approveTx.wait();
+        console.log('✅ Approval confirmed!');
+      } else {
+        console.log('✅ Already approved!');
+      }
+
+      // ✅ STEP 4 (or STEP 3): Transfer USDTO to wrapper & call depositForUser
+      const depositStepNumber = needsGas && gasQuote ? '4/4' : '3/3';
+      setStatusMessage(`Step ${depositStepNumber}: Depositing to your account...`);
       
       const wrapperContract = new ethers.Contract(WRAPPER_CONTRACT, WRAPPER_ABI, hyperSigner);
       
+      // Transfer USDTO from user to wrapper
+      console.log('Transferring USDTO to wrapper...');
+      const transferTx = await usdtoContract.transfer(WRAPPER_CONTRACT, bridgedAmount);
+      console.log('Transfer tx:', transferTx.hash);
+      
+      setStatusMessage('Confirming transfer...');
+      await transferTx.wait();
+      console.log('✅ USDTO transferred to wrapper!');
+      
+      // Now credit user's balance
       console.log('Calling depositForUser with amount:', bridgedAmount, 'for user:', address);
-      setStatusMessage(needsGas ? 'Using refuel gas to deposit...' : 'Please confirm deposit transaction...');
+      setStatusMessage('Crediting your balance...');
       
       const depositTx = await wrapperContract.depositForUser(bridgedAmount, address);
       console.log('depositForUser tx:', depositTx.hash);
@@ -300,17 +387,33 @@ export default function CustomBridge({
         {/* Quote Review */}
         {step === 'reviewing' && quote && (
           <div className="space-y-4">
-            {/* Gas Info Notice */}
-            {needsGas && (
-              <div className="bg-blue-500/10 border border-blue-500/30 rounded-xl p-3">
+            {/* Gas Bridge Notice */}
+            {needsGas && gasQuote && (
+              <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-3">
                 <div className="flex items-start gap-2">
-                  <svg className="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg className="w-5 h-5 text-yellow-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
                   <div>
-                    <p className="text-blue-400 text-sm font-medium font-geist">Gas Refuel Included</p>
-                    <p className="text-blue-400/70 text-xs font-geist mt-1">
-                      Bridge includes HYPE gas automatically. Tokens go directly to wrapper, gas goes to your wallet.
+                    <p className="text-yellow-400 text-sm font-medium font-geist">Gas Bridge Required</p>
+                    <p className="text-yellow-400/70 text-xs font-geist mt-1">
+                      You'll bridge {formatTokenAmount(gasQuote.fromAmount, 18, 4)} ETH first to get HYPE gas (~15s wait), then proceed with main bridge.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {needsGas && !gasQuote && (
+              <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-3">
+                <div className="flex items-start gap-2">
+                  <svg className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                  <div>
+                    <p className="text-red-400 text-sm font-medium font-geist">No Gas Route Available</p>
+                    <p className="text-red-400/70 text-xs font-geist mt-1">
+                      You'll need to get HYPE gas manually after bridging (faucet or another bridge).
                     </p>
                   </div>
                 </div>
@@ -336,10 +439,10 @@ export default function CustomBridge({
                   {formatTokenAmount(quote.toAmountMin, 6)} USDTO
                 </span>
               </div>
-              {needsGas && (
+              {needsGas && gasQuote && (
                 <div className="flex justify-between items-center text-xs pt-2 border-t border-gray-700/30">
-                  <span className="text-blue-400 font-geist">+ HYPE gas (refuel)</span>
-                  <span className="text-blue-400 font-geist font-medium">{refuelAmount} HYPE</span>
+                  <span className="text-yellow-400 font-geist">+ Gas bridge (ETH)</span>
+                  <span className="text-yellow-400 font-geist font-medium">{formatTokenAmount(gasQuote.fromAmount, 18, 4)} ETH</span>
                 </div>
               )}
             </div>
@@ -347,17 +450,17 @@ export default function CustomBridge({
             {/* Destination */}
             <div className="bg-[#0d1f16] rounded-xl p-4">
               <div className="flex justify-between items-center">
-                <span className="text-gray-400 text-sm font-geist">Tokens Destination</span>
-                <span className="text-white text-sm font-geist">Wrapper Contract</span>
+                <span className="text-gray-400 text-sm font-geist">USDTO Destination</span>
+                <span className="text-white text-sm font-geist">Your Wallet → Wrapper</span>
               </div>
               <div className="text-xs text-gray-500 mt-1 font-mono truncate">
-                {WRAPPER_CONTRACT}
+                {address}
               </div>
-              {needsGas && (
+              {needsGas && gasQuote && (
                 <div className="mt-2 pt-2 border-t border-gray-700/50">
                   <div className="flex justify-between items-center">
-                    <span className="text-gray-400 text-xs font-geist">Gas Destination</span>
-                    <span className="text-blue-400 text-xs font-geist">Your Wallet</span>
+                    <span className="text-gray-400 text-xs font-geist">HYPE Gas → Your Wallet</span>
+                    <span className="text-yellow-400 text-xs font-geist">{formatTokenAmount(gasQuote.toAmountMin, 18, 4)} HYPE</span>
                   </div>
                 </div>
               )}
@@ -400,16 +503,16 @@ export default function CustomBridge({
             </div>
 
             <p className="text-xs text-gray-500 text-center font-geist">
-              {needsGas 
-                ? `Tokens → Wrapper, ${refuelAmount} HYPE gas → Your wallet. Then deposit to credit your account.`
-                : `Tokens will be ${bridgeMode === 'bridge' ? 'bridged' : 'swapped'} directly to wrapper and credited to your account`
+              {needsGas && gasQuote
+                ? `Will bridge ETH for gas first, then ${fromTokenSymbol} → USDTO, then approve & deposit.`
+                : `Tokens will be ${bridgeMode === 'bridge' ? 'bridged' : 'swapped'} to your wallet, then approved and deposited to wrapper.`
               }
             </p>
           </div>
         )}
 
         {/* Executing State */}
-        {(step === 'executing' || step === 'waiting' || step === 'depositing') && (
+        {(step === 'gas-bridging' || step === 'executing' || step === 'waiting' || step === 'depositing') && (
           <div className="text-center py-8">
             <div className="w-12 h-12 border-2 border-[#00ff41] border-t-transparent rounded-full animate-spin mx-auto mb-4" />
             <p className="text-white mb-2 font-geist">{statusMessage}</p>
@@ -419,6 +522,20 @@ export default function CustomBridge({
               </p>
             )}
             <div className="mt-6 space-y-2">
+              {/* Gas Bridge Step */}
+              {needsGas && gasQuote && (
+                <div className={`flex items-center gap-2 ${step === 'gas-bridging' ? 'text-[#00ff41]' : ['executing', 'waiting', 'depositing'].includes(step) ? 'text-green-600' : 'text-gray-500'}`}>
+                  <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${step === 'gas-bridging' ? 'border-[#00ff41] bg-[#00ff41]/20' : ['executing', 'waiting', 'depositing'].includes(step) ? 'border-green-600 bg-green-600' : 'border-gray-500'}`}>
+                    {['executing', 'waiting', 'depositing'].includes(step) && (
+                      <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                    )}
+                  </div>
+                  <span className="text-sm font-geist">Bridge ETH → HYPE gas</span>
+                </div>
+              )}
+              {/* Main Bridge Step */}
               <div className={`flex items-center gap-2 ${step === 'executing' ? 'text-[#00ff41]' : ['waiting', 'depositing'].includes(step) ? 'text-green-600' : 'text-gray-500'}`}>
                 <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${step === 'executing' ? 'border-[#00ff41] bg-[#00ff41]/20' : ['waiting', 'depositing'].includes(step) ? 'border-green-600 bg-green-600' : 'border-gray-500'}`}>
                   {['waiting', 'depositing'].includes(step) && (
@@ -428,7 +545,7 @@ export default function CustomBridge({
                   )}
                 </div>
                 <span className="text-sm font-geist">
-                  {bridgeMode === 'bridge' ? 'Bridge' : 'Swap'} {needsGas ? '(with gas refuel)' : ''}
+                  {bridgeMode === 'bridge' ? 'Bridge' : 'Swap'} {fromTokenSymbol} → USDTO
                 </span>
               </div>
               {!isSwap && (

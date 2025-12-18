@@ -109,27 +109,46 @@ function getGraphStartTime(): number | null {
  * Get stored session info
  */
 
-function getStoredSession(): any | null {
+function getStoredSession(userAddress?: string): any | null {
   if (typeof window === 'undefined') return null;
   
-  console.log('🔍 Looking for session in localStorage...');
+  console.log('🔍 Looking for session in localStorage for user:', userAddress);
   
-  // First try to find any trading session in localStorage
   let sessionData = null;
   let sessionKey = null;
   
-  // Look for session with pattern tradingSession_*
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (key && key.startsWith('tradingSession_')) {
-      sessionData = storage.get<string>(key);
-      sessionKey = key;
-      console.log('✅ Found session with key:', key);
-      break;
+  // If we have a user address, look for THEIR specific session
+  if (userAddress) {
+    sessionKey = STORAGE_KEYS.TRADING_SESSION(userAddress);
+    sessionData = storage.get<string>(sessionKey);
+    
+    if (sessionData) {
+      console.log('✅ Found session with key:', sessionKey);
+    } else {
+      // Try with lowercase address (case-insensitive fallback)
+      const sessionKeyLower = STORAGE_KEYS.TRADING_SESSION(userAddress.toLowerCase());
+      sessionData = storage.get<string>(sessionKeyLower);
+      if (sessionData) {
+        sessionKey = sessionKeyLower;
+        console.log('✅ Found session with lowercase key:', sessionKeyLower);
+      }
     }
   }
   
-  // Fallback to mercurySession for backward compatibility
+  // Fallback: Look for any trading session (for backward compatibility when no address provided)
+  if (!sessionData) {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('tradingSession_')) {
+        sessionData = storage.get<string>(key);
+        sessionKey = key;
+        console.log('✅ Found session with key (fallback):', key);
+        break;
+      }
+    }
+  }
+  
+  // Final fallback to mercurySession for backward compatibility
   if (!sessionData) {
     sessionData = storage.get<string>(STORAGE_KEYS.MERCURY_SESSION);
     sessionKey = STORAGE_KEYS.MERCURY_SESSION;
@@ -327,6 +346,9 @@ export function useOrderPlacement() {
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
   const [lastOrderResult, setLastOrderResult] = useState<OrderPlacementResult | null>(null);
 
+  // Get current user address for session lookup
+  const currentUserAddress = sdk?.userAddress;
+
   /**
    * Helper function to dispatch error event for cell deselection
    */
@@ -379,7 +401,7 @@ export function useOrderPlacement() {
       // STEP 1: Get Session Info
       // ========================================
       console.log('📍 STEP 1: Loading session...');
-      const session = getStoredSession();
+      const session = getStoredSession(currentUserAddress);
       
       console.log('✅ Session loaded:');
       console.log('   User:', session.userAddress);
@@ -1105,7 +1127,7 @@ export function useOrderPlacement() {
       // 🔄 ROLLBACK: Try to rollback nonce if we got far enough to have user address
       // Check which variables were initialized before the error
       try {
-        const session = getStoredSession();
+        const session = getStoredSession(currentUserAddress);
         if (session && (session.user || session.userAddress)) {
           const userAddress = session.user || session.userAddress;
           rollbackNonce(userAddress);
@@ -1189,7 +1211,7 @@ export function useOrderPlacement() {
     console.log('🎯 placeOrderFromCell called:', { timeOffset, priceLevel, amount });
     
     // Check if session exists
-    const session = getStoredSession();
+    const session = getStoredSession(currentUserAddress);
     if (!session) {
       console.log('❌ No session found - showing prompt');
       return { success: false, error: 'No session found. Please create a session first.', isSessionError: true };
