@@ -5,11 +5,10 @@ const nextConfig = {
   experimental: {
     scrollRestoration: true,
   },
-  // Add empty turbopack config to silence warning (Next.js 16+ uses Turbopack by default)
-  turbopack: {},
+  // Remove turbopack config since we're using webpack
   webpack: (config, { isServer }) => {
     // Externalize packages that should not be bundled
-    config.externals.push('pino-pretty', 'lokijs', 'encoding');
+    config.externals.push('pino-pretty', 'lokijs', 'encoding', 'pino', 'thread-stream', 'sonic-boom');
     
     // Fix for MetaMask SDK and other browser-only packages
     if (!isServer) {
@@ -69,10 +68,8 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
-  // Ignore ESLint errors during build (optional - remove if you want strict checks)
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
+  // Remove invalid eslint config (no longer supported in next.config.js)
+  // Use .eslintrc.json instead
 };
 
 module.exports = nextConfig;

@@ -147,7 +147,7 @@ const Home: NextPage = () => {
           content="Mercury Trade - Advanced Trading Platform"
           name="description"
         />
-        <link href="/favicon.ico" rel="icon" />
+        <link href="/m.svg" rel="icon" type="image/svg+xml" />
       </Head>
 
       {/* Order Result Notification */}

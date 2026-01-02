@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { useAccount } from 'wagmi';
-import { usePriceFeed } from '../contexts/PriceFeedContext';
+import { usePriceFeed, registerSharedPriceWorker } from '../contexts/PriceFeedContext';
 import { calculateQuickPrediction, getGridMultiplier, getQuickMultiplier } from '../lib/gridPredictions';
 import { 
   calculateDynamicB, 
@@ -21,6 +21,54 @@ import { supabase } from '../lib/supabaseClient';
 import { PRICE_STEP, PRICE_DECIMALS, GRID_CONFIG, CHART_CONFIG, CHART_COLORS } from '../config';
 
 const OTHER_USER_SETTLEMENT_TTL = 30_000; // milliseconds to keep other users' win/loss highlights visible
+
+// Shared Web Worker instance that persists across component mounts/unmounts
+// This prevents the price history from being lost when navigating between pages
+let sharedPriceWorker: Worker | null = null;
+let workerReferenceCount = 0;
+
+// Shared state that persists across component mounts/unmounts
+// This prevents the chart from replotting when navigating between pages
+let sharedHistory: DataPoint[] = [];
+let sharedCurrentPrice: number | null = null;
+let sharedTargetPrice: number | null = null;
+let sharedHasStartedPlotting: boolean = false;
+
+// Duration for history filtering (must match component's DURATION)
+const SHARED_DURATION = 114; // CHART_CONFIG.DURATION_SECONDS - 6
+
+// Persistent message handler for the shared worker
+// This runs even when TradingChart is unmounted, keeping sharedHistory updated
+const createPersistentMessageHandler = () => {
+  return (e: MessageEvent) => {
+    const { type, data } = e.data;
+    
+    switch (type) {
+      case 'DATA_POINT':
+        const t = data.t;
+        // Update shared history directly (works even when component is unmounted)
+        sharedHistory = [
+          ...sharedHistory.filter((d: DataPoint) => t - d.t < SHARED_DURATION * 2),
+          { t: data.t, v: data.v }
+        ];
+        sharedCurrentPrice = data.v;
+        break;
+        
+      case 'STARTED_PLOTTING':
+        sharedHasStartedPlotting = true;
+        break;
+        
+      case 'STATE':
+        if (data.history && data.history.length > 0) {
+          sharedHistory = data.history;
+          sharedCurrentPrice = data.currentPrice;
+          sharedTargetPrice = data.targetPrice || data.currentPrice;
+          sharedHasStartedPlotting = data.hasStartedPlotting;
+        }
+        break;
+    }
+  };
+};
 
 interface DataPoint {
   t: number; // Time in seconds
@@ -465,9 +513,12 @@ export default function TradingChart({
   }, [forceUpdate]);
   
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const priceRef = useRef<number>(wsPrice > 0 ? wsPrice : (initialBasePrice || 38.12));
-  const targetPriceRef = useRef<number>(wsPrice > 0 ? wsPrice : (initialBasePrice || 38.12));
-  const historyRef = useRef<DataPoint[]>([]);
+  
+  // Initialize refs with shared state if available (from previous mount)
+  const priceRef = useRef<number>(sharedCurrentPrice ?? (wsPrice > 0 ? wsPrice : (initialBasePrice || 38.12)));
+  const targetPriceRef = useRef<number>(sharedTargetPrice ?? (wsPrice > 0 ? wsPrice : (initialBasePrice || 38.12)));
+  const historyRef = useRef<DataPoint[]>(sharedHistory.length > 0 ? [...sharedHistory] : []);
+  const hasStartedPlottingRef = useRef<boolean>(sharedHasStartedPlotting);
   // Custom cursor SVG converted to data URL
   const customCursorSVG = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg width="27" height="27" viewBox="0 0 27 27" fill="none" xmlns="http://www.w3.org/2000/svg">
 <g filter="url(#filter0_d_602_38673)">
@@ -513,7 +564,6 @@ export default function TradingChart({
   const currentDragSessionRef = useRef<string | null>(null);
   const mouseDownTimeRef = useRef<number>(0);
   const hasDraggedRef = useRef<boolean>(false);
-  const hasStartedPlottingRef = useRef<boolean>(false);
   const isInDragSelectionModeRef = useRef<boolean>(false); // Track if double-click activated drag mode
   
   // Web Worker for continuous background plotting
@@ -1495,43 +1545,17 @@ export default function TradingChart({
     }
 
    
-    // Initialize Web Worker if not already running
-    if (!priceWorkerRef.current && typeof window !== 'undefined' && window.Worker) {
+    // Initialize or reuse shared Web Worker
+    if (!sharedPriceWorker && typeof window !== 'undefined' && window.Worker) {
       try {
         const worker = new Worker('/priceWorker.js');
+        sharedPriceWorker = worker;
         priceWorkerRef.current = worker;
+        workerReferenceCount = 1;
         
-        // Handle messages from worker
-        worker.onmessage = (e: MessageEvent) => {
-          const { type, data } = e.data;
-          
-          switch (type) {
-            case 'DATA_POINT':
-              // Add data point to history (worker sends these continuously)
-              // This keeps the history updated even when tab is hidden
-              const t = data.t;
-              historyRef.current = [
-                ...historyRef.current.filter((d: DataPoint) => t - d.t < DURATION * 2),
-                { t: data.t, v: data.v }
-              ];
-              priceRef.current = data.v;
-              break;
-              
-            case 'STARTED_PLOTTING':
-              hasStartedPlottingRef.current = true;
-              break;
-              
-            case 'STATE':
-             if (data.history && data.history.length > 0) {
-                // console.log('📺 Catch-up sync: replacing', historyRef.current.length, 'points with', data.history.length, 'points from worker');
-                historyRef.current = data.history;
-                priceRef.current = data.currentPrice;
-                targetPriceRef.current = data.targetPrice || data.currentPrice;
-                hasStartedPlottingRef.current = data.hasStartedPlotting;
-              }
-              break;
-          }
-        };
+        // Use persistent message handler that updates sharedHistory even when component unmounts
+        // This ensures price data keeps being collected during page navigation
+        worker.onmessage = createPersistentMessageHandler();
         
         worker.onerror = (err) => {
           // console.error('Price Worker error:', err);
@@ -1544,11 +1568,46 @@ export default function TradingChart({
           data: { initialPrice } 
         });
         
+        console.log('🆕 Created new shared Web Worker');
+        
+        // Register the worker with PriceFeedContext so it receives price updates even when this component unmounts
+        registerSharedPriceWorker(worker);
+        
+        // Initialize shared state
+        sharedHistory = [];
+        sharedCurrentPrice = initialPrice;
+        sharedTargetPrice = initialPrice;
+        sharedHasStartedPlotting = false;
         
       } catch (err) {
         // console.error('Failed to create Web Worker:', err);
       }
+    } else if (sharedPriceWorker) {
+      // Reuse existing worker
+      priceWorkerRef.current = sharedPriceWorker;
+      workerReferenceCount++;
+      
+      // Make sure PriceFeedContext has the worker reference (in case of hot reload)
+      registerSharedPriceWorker(sharedPriceWorker);
+      
+      console.log('♻️ Reusing existing Web Worker (ref count:', workerReferenceCount, ') - restoring', sharedHistory.length, 'points');
+      
+      // Immediately restore local refs from shared state
+      historyRef.current = [...sharedHistory];
+      if (sharedCurrentPrice !== null) priceRef.current = sharedCurrentPrice;
+      if (sharedTargetPrice !== null) targetPriceRef.current = sharedTargetPrice;
+      hasStartedPlottingRef.current = sharedHasStartedPlotting;
     }
+    
+    // Set up interval to sync local refs from shared state
+    // This ensures the component stays in sync with data collected by the persistent handler
+    const syncInterval = setInterval(() => {
+      if (sharedHistory.length > 0) {
+        historyRef.current = [...sharedHistory];
+        if (sharedCurrentPrice !== null) priceRef.current = sharedCurrentPrice;
+        hasStartedPlottingRef.current = sharedHasStartedPlotting;
+      }
+    }, 100); // Sync every 100ms
     
     // Handle visibility change - notify worker and sync when tab becomes visible
     const handleVisibilityChange = () => {
@@ -3225,13 +3284,20 @@ export default function TradingChart({
       // Remove visibility change listener
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       
-      // Terminate Web Worker
-      if (priceWorkerRef.current) {
-        priceWorkerRef.current.postMessage({ type: 'STOP' });
-        priceWorkerRef.current.terminate();
-        priceWorkerRef.current = null;
-        // console.log('🔧 Price Worker terminated');
-      }
+      // Clear the sync interval
+      clearInterval(syncInterval);
+      
+      // Decrement worker reference count
+      workerReferenceCount--;
+      console.log('🧹 Cleanup - remaining worker references:', workerReferenceCount, '- sharedHistory has', sharedHistory.length, 'points');
+      
+      // IMPORTANT: Do NOT terminate the worker when navigating away!
+      // The worker must keep running to continuously collect price data
+      // This ensures no gaps in the price line when user returns to Trade page
+      // Worker will only be terminated on full page reload (which resets everything anyway)
+      
+      // Clear local reference but keep shared worker alive
+      priceWorkerRef.current = null;
       
       // Clear fetch queue to cancel pending requests
       multiplierFetchQueue.current.clear();
